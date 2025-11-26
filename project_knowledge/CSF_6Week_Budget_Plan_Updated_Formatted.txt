@@ -1,0 +1,676 @@
+CSF Software - 6-Week Milestones
+Complete Web Application (Mobile Responsive Design)
+---
+
+■ IMPORTANT PROJECT SCOPE
+■ What's Included
+- Web Application Only (responsive design for mobile/tablet/desktop)
+- NO Native Mobile App (no iOS/Android app development)
+- Mobile-Friendly Web Interface (works on all devices through browser)
+- Responsive Design (adapts to all screen sizes)
+- Flexible Payment Options (single payment, subscription, AND installment plans)
+- Customizable Waivers (per location, program, or organization needs)
+- Basic reporting (essential metrics only)
+- English language only
+
+Budget & Timeline
+- Total Budget: $7,000 USD
+- Timeline: 6 weeks (42 days)
+- Working Hours: 50-60 hours/week
+- UI/UX: Already designed in Figma ■
+---
+
+■ BUDGET BREAKDOWN BY MILESTONE
+Milestone
+
+Week
+
+Hours
+
+Budget Allocation
+
+% of Total
+
+-----------
+
+------
+
+-------
+
+-------------------
+
+------------
+
+Milestone 1
+
+Week 1
+
+50-55h
+
+$1,000
+
+14.3%
+
+Milestone 2
+
+Week 2
+
+55-60h
+
+$1,200
+
+17.1%
+
+Milestone 3
+
+Week 3
+
+60-65h
+
+$1,500
+
+21.4%
+
+Milestone 4
+
+Week 4
+
+55-60h
+
+$1,300
+
+18.6%
+
+Milestone 5
+
+Week 5
+
+50-55h
+
+$1,200
+
+17.1%
+
+Milestone 6
+
+Week 6
+
+45-50h
+
+$800
+
+11.4%
+
+**TOTAL**
+
+**6 weeks**
+
+**315-345h**
+
+**$7,000**
+
+**100%**
+
+---
+
+■ MILESTONE 1: Foundation, Auth & Class Browsing
+Duration: Week 1 (Days 1-7)
+Hours: 50-55 hours
+Budget: $1,000 USD (14.3%)
+Status: ■ Not Started
+
+Deliverables
+Backend (25-30 hours):
+- [ ] FastAPI project setup with PostgreSQL database
+- [ ] Database schema design (Users, Roles, Children, Classes, Waivers, Payments)
+- [ ] SQLAlchemy models created
+- [ ] Database migrations (Alembic)
+- [ ] User authentication APIs (email/password + Google OAuth)
+- [ ] JWT token system
+- [ ] Program, Area, School, Class models
+- [ ] Class CRUD APIs with filtering & sorting
+- [ ] Waitlist tracking logic
+- [ ] Basic unit tests (pytest)
+Frontend (20-25 hours):
+- [ ] Next.js 14 project with TypeScript
+- [ ] Tailwind CSS + shadcn/ui setup
+- [ ] Authentication pages (Login, Signup) from Figma
+- [ ] Google OAuth integration
+- [ ] Protected routes implementation
+- [ ] Programs & Areas landing page
+- [ ] Class cards component (responsive)
+- [ ] Filtering UI (school, weekday, time, age, capacity)
+- [ ] Class Detail page
+- [ ] Mobile responsive design (works on phones, tablets, desktop)
+Testing (5 hours):
+- [ ] Auth flow E2E tests
+- [ ] Class browsing tests
+- [ ] Mobile responsiveness testing
+
+Success Criteria
+■ User can register/login (email + Google)
+■ Public can browse classes with filters
+■ Mobile responsive - works perfectly on phones
+■ Database migrations working
+■ GitHub repo with CI/CD
+Payment: $1,000 upon milestone completion
+---
+
+■ MILESTONE 2: Child Registration & Customizable
+Waivers
+Duration: Week 2 (Days 8-14)
+Hours: 55-60 hours
+Budget: $1,200 USD (17.1%)
+Status: ■ Not Started
+
+Deliverables
+Backend (30-35 hours):
+- [ ] Child model with all fields (encrypted sensitive data)
+- [ ] Child CRUD APIs
+- [ ] Emergency contact handling
+- [ ] Health insurance field (encrypted, masked)
+- [ ] Waiver Template System:
+- [ ] WaiverTemplate model (title, content, version, location-specific)
+- [ ] Waiver template CRUD APIs
+- [ ] Rich text editor support for waiver content
+- [ ] Waiver template versioning system
+- [ ] Location/Program-specific waiver assignment
+- [ ] Default waiver templates (4 types)
+- [ ] Custom waiver creation per location
+- [ ] Waiver acceptance tracking (IP, UA, timestamp)
+- [ ] Waiver acceptance API
+- [ ] Schedule builder logic (recurrence patterns)
+- [ ] Calendar instance generation (start to end date)
+- [ ] "No-class" date handling
+- [ ] Unit tests for child & waiver management
+Frontend (20-25 hours):
+- [ ] Add Child form (all fields from spec)
+- [ ] DOB picker with age calculation
+- [ ] Jersey size & grade dropdowns
+- [ ] Medical conditions UI
+- [ ] Emergency contact form section
+- [ ] Multi-step form navigation
+- [ ] Dynamic waiver display (renders custom waivers)
+- [ ] Waiver acceptance UI (scrollable + checkboxes)
+- [ ] All applicable waivers acceptance flow
+- [ ] Form validation (React Hook Form + Zod)
+- [ ] Schedule builder UI
+- [ ] Calendar view for date selection
+- [ ] Admin: Waiver Template Management
+- [ ] Waiver template list page
+- [ ] Waiver template editor (rich text)
+- [ ] Version history viewer
+- [ ] Location/Program assignment UI
+- [ ] Mobile-optimized forms (touch-friendly, easy input)
+
+Testing (5 hours):
+- [ ] Child registration E2E tests
+- [ ] Waiver acceptance tests (default + custom)
+- [ ] Waiver template CRUD tests
+- [ ] Form validation tests
+- [ ] Mobile form usability testing
+
+Success Criteria
+■ Parent can add child with all required info
+■ Sensitive data encrypted (medical, insurance)
+■ Custom waivers can be created per location/program
+■ Dynamic waiver rendering working
+■ Waiver versioning functional
+■ Schedule builder creates class instances
+■ Forms work smoothly on mobile devices
+Payment: $1,200 upon milestone completion
+---
+
+■ MILESTONE 3: Payment Integration (Stripe) + Installment
+Plans ■ CRITICAL
+Duration: Week 3 (Days 15-21)
+Hours: 60-65 hours
+Budget: $1,500 USD (21.4%)
+Status: ■ Not Started
+
+Deliverables
+Backend (40-45 hours):
+- [ ] Stripe account setup (test mode)
+- [ ] Stripe Customer creation on user registration
+- [ ] PaymentMethod storage
+- [ ] Payment Types Implementation:
+- [ ] SetupIntent for memberships (save card)
+- [ ] PaymentIntent for one-time payments
+- [ ] Subscription creation for memberships
+- [ ] Installment plan system
+- [ ] Installment Plan Features:
+- [ ] InstallmentPlan model (number of payments, frequency, amount)
+- [ ] Installment schedule generation
+- [ ] InstallmentPayment model (schedule tracking)
+- [ ] Automatic installment payment processing (Stripe scheduled payments)
+- [ ] Installment payment reminders (email notifications)
+- [ ] Failed installment handling & retry logic
+- [ ] Manual installment payment triggering
+- [ ] Installment status tracking (paid, pending, failed, refunded)
+- [ ] Configurable installment options per class/membership
+
+- [ ] Stripe webhook endpoint
+- [ ] Handle 8 key Stripe events:
+- [ ] invoice.payment_succeeded
+- [ ] invoice.payment_failed
+- [ ] customer.subscription.updated
+- [ ] payment_intent.succeeded
+- [ ] payment_intent.failed
+- [ ] charge.refunded
+- [ ] invoice.upcoming (installment reminder)
+- [ ] payment_intent.payment_failed (installment failure)
+- [ ] Order & Enrollment models
+- [ ] Proration calculation (short-term classes)
+- [ ] Proration calculation (memberships)
+- [ ] Discount code validation logic
+- [ ] Sibling auto-discount logic (25%, 35%, 45%)
+- [ ] Order calculation API (line items, discounts, installments, total)
+- [ ] Enrollment creation on successful payment
+- [ ] Comprehensive payment unit tests
+Frontend (15-20 hours):
+- [ ] Stripe Elements integration
+- [ ] Checkout page (order summary + payment options)
+- [ ] Payment method selection:
+- [ ] Pay in full (one-time)
+- [ ] Subscribe (recurring)
+- [ ] Pay in installments (2, 3, 4, or custom options)
+- [ ] Installment plan selector:
+- [ ] Display installment breakdown
+- [ ] Show payment schedule
+- [ ] Calculate and display per-installment amount
+- [ ] Show total with installment fees (if any)
+- [ ] Display line items (per child, per class)
+- [ ] Discount code input field
+- [ ] Sibling discount auto-display
+- [ ] Payment form (card input)
+- [ ] Loading states during payment
+- [ ] Error handling (payment failures)
+- [ ] Order confirmation page (with installment schedule if applicable)
+- [ ] "Join Waitlist" flow
+- [ ] Parent Dashboard: Installment Tracker
+- [ ] View upcoming installments
+- [ ] Payment history
+- [ ] Failed payment alerts
+- [ ] Mobile-optimized checkout (easy payment on phones)
+Testing (5 hours):
+- [ ] Payment success scenarios (Stripe test cards)
+- [ ] Payment failure scenarios
+- [ ] Installment plan creation tests
+- [ ] Installment payment processing tests
+- [ ] Failed installment handling tests
+- [ ] Proration calculation tests
+- [ ] Sibling discount tests
+
+- [ ] Webhook testing (Stripe CLI)
+- [ ] Mobile checkout testing
+
+Success Criteria
+■ One-time payments working (short-term classes)
+■ Subscriptions working (memberships)
+■ Installment plans fully functional
+■ Automatic installment processing working
+■ Installment reminders sent
+■ Failed installment handling robust
+■ Proration calculations accurate
+■ Sibling discounts auto-apply correctly
+■ Enrollment created on successful payment
+■ Stripe webhooks handling all events
+■ Payment works smoothly on mobile devices
+Payment: $1,500 upon milestone completion
+---
+
+■ MILESTONE 4: Email Automation & Admin Portal Core
+Duration: Week 4 (Days 22-28)
+Hours: 55-60 hours
+Budget: $1,300 USD (18.6%)
+Status: ■ Not Started
+
+Deliverables
+Backend (30-35 hours):
+- [ ] Mailchimp account setup
+- [ ] Mailchimp Audience creation
+- [ ] Custom merge fields & tags definition
+- [ ] Mailchimp API integration
+- [ ] Audience member upsert on enrollment
+- [ ] Tag application (Program, Area, Class, Membership/ShortTerm/Installment)
+- [ ] Tag updates on class transfer
+- [ ] Tag retirement on cancellation
+- [ ] Transactional email setup (SendGrid/AWS SES)
+- [ ] Email templates:
+- [ ] Order confirmation
+- [ ] Welcome email
+- [ ] Installment reminder (3 days before)
+- [ ] Installment payment success
+- [ ] Installment payment failed
+- [ ] Final installment confirmation
+- [ ] Email sending on enrollment
+- [ ] Installment reminder scheduler
+- [ ] Dashboard metrics APIs:
+
+- [ ] Active members count
+- [ ] Short-term vs Membership vs Installment split
+- [ ] Registrations (24h, 7d, 30d)
+- [ ] Cancellations
+- [ ] Outstanding installments
+- [ ] Failed payments
+- [ ] Today's practices
+- [ ] CSV export APIs
+- [ ] Role-based access control (RBAC)
+- [ ] Class management APIs (create, edit, delete, clone)
+- [ ] Installment plan configuration APIs
+- [ ] Roster API (child + parent info, NO medical)
+Frontend (20-25 hours):
+- [ ] Admin layout from Figma (sidebar navigation)
+- [ ] Role-based route protection
+- [ ] Dashboard page with widgets:
+- [ ] Active members card
+- [ ] Registration/cancellation graphs (Recharts)
+- [ ] Payment type distribution (pie chart)
+- [ ] Outstanding installments alert widget
+- [ ] Failed payments widget
+- [ ] Today's practices table
+- [ ] CSV/PNG download functionality
+- [ ] Classes page (list with filters)
+- [ ] Class creation form
+- [ ] Class edit form
+- [ ] Pricing configuration UI
+- [ ] Installment plan configuration UI
+- [ ] Enable/disable installments per class
+- [ ] Set installment options (2, 3, 4 payments)
+- [ ] Set installment fees (if any)
+- [ ] Class cloning modal
+- [ ] Roster view page
+- [ ] Mobile-responsive admin panel (tablet/phone friendly)
+Testing (5 hours):
+- [ ] Email delivery tests (including installment emails)
+- [ ] Mailchimp tag verification
+- [ ] Dashboard metrics accuracy
+- [ ] Installment configuration tests
+- [ ] Admin authentication tests
+- [ ] Mobile admin panel testing
+
+Success Criteria
+■ Confirmation emails sent automatically
+■ Installment reminder emails working
+■ Mailchimp tags applied correctly (including installment status)
+■ Admin dashboard displaying all metrics
+■ Installment tracking visible on dashboard
+■ Admin can create/edit classes with installment options
+
+■ Roster viewing working
+■ Admin panel usable on tablets and phones
+Payment: $1,300 upon milestone completion
+---
+
+■ MILESTONE 5: Client Management & Advanced Admin
+Features
+Duration: Week 5 (Days 29-35)
+Hours: 50-55 hours
+Budget: $1,200 USD (17.1%)
+Status: ■ Not Started
+
+Deliverables
+Backend (30-35 hours):
+- [ ] Client/member list APIs (pagination, filters)
+- [ ] Client profile API (full details + payment history)
+- [ ] Client edit API
+- [ ] Payment & Installment Management:
+- [ ] View installment schedule per client
+- [ ] Retry failed installment payment
+- [ ] Mark installment as paid (manual override)
+- [ ] Cancel installment plan
+- [ ] Adjust installment schedule
+- [ ] Refund installment payment
+- [ ] Enrollment management APIs:
+- [ ] Add enrollment
+- [ ] Transfer enrollment (with installment handling)
+- [ ] Cancel enrollment (15-day policy + installment prorating)
+- [ ] Reactivate enrollment
+- [ ] 15-day cancellation policy logic (with installment adjustments)
+- [ ] Cancellation effective date calculation
+- [ ] Installment refund calculation
+- [ ] Bulk email/SMS trigger API
+- [ ] Bulk export API (CSV/Excel)
+- [ ] Finance/revenue APIs:
+- [ ] Revenue by time, program, area, class
+- [ ] Revenue by payment type (one-time, subscription, installment)
+- [ ] Installment payment collection rate
+- [ ] Outstanding installment balance
+- [ ] Stripe KPIs (successful, failed, refunds)
+- [ ] Past-due balance calculation
+- [ ] Installment past-due tracking
+- [ ] Discount code CRUD APIs
+- [ ] Scholarship APIs
+- [ ] Calendar view APIs (month/week/day)
+- [ ] Communication log APIs
+
+Frontend (15-20 hours):
+- [ ] Clients page (Accounts + Members tabs)
+- [ ] Search and filter UI
+- [ ] Client profile page with:
+- [ ] Basic info
+- [ ] Children
+- [ ] Enrollments
+- [ ] Payment history (all types)
+- [ ] Installment schedule viewer
+- [ ] Outstanding balance indicator
+- [ ] Installment management modals:
+- [ ] Retry failed payment
+- [ ] Cancel installment plan
+- [ ] Adjust schedule
+- [ ] Manual payment recording
+- [ ] Enrollment management modals:
+- [ ] Add enrollment
+- [ ] Transfer enrollment (with installment handling)
+- [ ] Cancel enrollment (with policy explanation + installment impact)
+- [ ] Reactivate enrollment
+- [ ] Bulk action UI (select multiple)
+- [ ] Finance page (Owner only) with:
+- [ ] Revenue widgets and graphs
+- [ ] Payment type breakdown
+- [ ] Installment collection metrics
+- [ ] Past-due installments report
+- [ ] Time range toggles
+- [ ] Export CSV button
+- [ ] Discount management page
+- [ ] Calendar component (month/week/day views)
+- [ ] Communication Center
+- [ ] All admin features mobile-responsive
+Testing (5 hours):
+- [ ] Client management tests
+- [ ] Enrollment add/transfer/cancel tests (with installments)
+- [ ] Installment management tests
+- [ ] Installment refund calculation tests
+- [ ] 15-day policy calculation tests
+- [ ] Finance calculations verification (all payment types)
+- [ ] Mobile admin features testing
+
+Success Criteria
+■ Admin can search/filter clients
+■ Client profile shows complete payment history (all types)
+■ Installment schedules visible and manageable
+■ Failed installments can be retried
+■ Enrollment management working (add, transfer, cancel)
+■ 15-day cancellation policy enforced (with installment handling)
+■ Finance module showing accurate revenue (all payment types)
+■ Installment collection metrics accurate
+
+■ Discount codes can be created
+■ Calendar displaying class sessions
+■ All features work on mobile/tablet
+Payment: $1,200 upon milestone completion
+---
+
+■ MILESTONE 6: Testing, Security, Polish & Documentation
+Duration: Week 6 (Days 36-42)
+Hours: 45-50 hours
+Budget: $800 USD (11.4%)
+Status: ■ Not Started
+
+Deliverables
+Security Hardening (15 hours):
+- [ ] PII encryption at rest (medical, insurance, payment data)
+- [ ] Role-based data access restrictions
+- [ ] Rate limiting on all endpoints (especially payment/installment)
+- [ ] CSRF protection
+- [ ] Security headers (CORS, CSP, X-Frame-Options)
+- [ ] SQL injection prevention audit
+- [ ] XSS prevention audit
+- [ ] PCI DSS compliance verification (Stripe handles card data)
+- [ ] Installment payment security audit
+- [ ] Daily database backup automation
+- [ ] Security scan (Bandit, npm audit)
+Testing (15 hours):
+- [ ] Achieve 75%+ backend test coverage
+- [ ] Integration tests for critical flows:
+- [ ] Registration → Payment → Enrollment (all payment types)
+- [ ] Subscription lifecycle
+- [ ] Installment plan lifecycle (creation → payments → completion)
+- [ ] Failed installment handling → retry → success
+- [ ] Cancellation with 15-day policy (all payment types)
+- [ ] Class transfer (with installment handling)
+- [ ] Discount application
+- [ ] Installment refund calculation
+- [ ] E2E tests (Cypress/Playwright):
+- [ ] Complete registration flow (all payment methods)
+- [ ] Installment payment selection and confirmation
+- [ ] Admin workflows (including installment management)
+- [ ] Payment flows (all types)
+- [ ] Custom waiver creation and assignment
+- [ ] Cross-browser testing (Chrome, Firefox, Safari, Edge)
+- [ ] Comprehensive mobile testing (iOS Safari, Chrome Android)
+- [ ] Load testing (100 concurrent users)
+- [ ] Stripe webhook reliability testing
+
+- [ ] Fix all critical bugs
+Performance Optimization (5-7 hours):
+- [ ] Database indexing (especially payment/installment tables)
+- [ ] Query optimization
+- [ ] Frontend code splitting
+- [ ] Image optimization
+- [ ] Bundle size optimization
+- [ ] Core Web Vitals optimization (LCP, FID, CLS)
+- [ ] Mobile performance optimization
+- [ ] Payment processing optimization
+Accessibility & Polish (5 hours):
+- [ ] WCAG 2.1 AA compliance
+- [ ] ARIA labels on interactive elements
+- [ ] Keyboard navigation
+- [ ] Screen reader testing
+- [ ] Color contrast verification
+- [ ] Focus indicators
+- [ ] Final UI polish (spacing, typography)
+- [ ] User-friendly error messages (especially payment/installment failures)
+- [ ] Loading states everywhere
+- [ ] Payment confirmation messaging clarity
+Documentation (5-8 hours):
+- [ ] API documentation (Swagger/OpenAPI)
+- [ ] Database schema documentation
+- [ ] Environment setup guide
+- [ ] Deployment guide
+- [ ] Stripe integration guide (including installment setup)
+- [ ] Mailchimp integration guide
+- [ ] User guide (parent):
+- [ ] How to register
+- [ ] How to select payment method (installments)
+- [ ] How to manage installments
+- [ ] How to view payment history
+- [ ] Admin manual:
+- [ ] System management
+- [ ] Installment plan configuration
+- [ ] Managing failed installments
+- [ ] Custom waiver creation
+- [ ] Financial reporting
+- [ ] Waiver template management guide
+- [ ] Installment troubleshooting guide
+- [ ] README files
+- [ ] General troubleshooting guide
+
+Success Criteria
+■ Security hardened (PII encrypted, rate limiting, PCI compliant)
+■ 75%+ test coverage
+■ All installment flows thoroughly tested
+
+■ Custom waiver functionality validated
+■ All critical bugs fixed
+■ Performance optimized (API <200ms, page load <3s)
+■ WCAG 2.1 AA compliant
+■ Mobile experience excellent (tested on real devices)
+■ Complete documentation ready (including installment & waiver guides)
+■ System production-ready
+Final Payment: $800 upon milestone completion
+---
+
+■ What You Get for $7,000
+Complete Web Application
+■ Public registration flow (browse classes, add child, accept waivers)
+■ Flexible payment options:
+- One-time payments
+- Recurring subscriptions
+- Installment plans (2, 3, 4+ payments)
+■ Customizable waiver system:
+- Create custom waivers per location/program
+- Rich text waiver editor
+- Version tracking
+- Dynamic waiver assignment
+■ Secure payment processing (Stripe - all payment types)
+■ Automatic installment payment processing
+■ Installment reminder system
+■ Failed installment handling & retry
+■ Admin dashboard (metrics, graphs, installment tracking)
+■ Class management (CRUD, schedule builder, cloning, installment configuration)
+■ Client management (search, filter, enrollment + installment management)
+■ Finance module (revenue tracking by payment type, installment metrics)
+■ Discount/scholarship system
+■ Calendar views
+■ Communication logging
+■ Roster sharing (tokenized links)
+■ Full mobile responsiveness (works perfectly on phones/tablets)
+---
+
+■ Tech Stack
+Backend
+- FastAPI (Python 3.11+)
+
+- PostgreSQL 15
+- SQLAlchemy 2.0
+- Stripe Python SDK (with installment support)
+- Mailchimp API
+- SendGrid/AWS SES
+- Celery (for scheduled installment processing)
+- Redis (for task queue)
+
+Frontend
+- Next.js 14 (App Router)
+- TypeScript 5
+- Tailwind CSS 3
+- shadcn/ui (components)
+- React Query
+- React Hook Form + Zod
+- Recharts (graphs)
+- TipTap/Slate (rich text editor for waivers)
+---
+
+■ Key Enhancements Summary
+■ Installment Plan Features
+1. Flexible payment scheduling - 2, 3, 4, or custom installment options
+2. Automatic processing - Stripe handles scheduled payments
+3. Smart reminders - 3-day advance email notifications
+4. Failure handling - Automatic retry logic + manual override
+5. Admin controls - Full installment management dashboard
+6. Financial tracking - Dedicated installment metrics and reporting
+7. Proration support - Handles cancellations and transfers
+8. Status tracking - Real-time installment payment status
+
+■ Custom Waiver System
+1. Rich text editor - Create formatted waivers with ease
+2. Version control - Track waiver changes over time
+3. Location-specific - Different waivers for different locations/programs
+4. Dynamic rendering - Automatically display correct waivers
+5. Admin management - Full CRUD operations for waiver templates
+6. Default templates - 4 standard waivers included out of the box
+7. Flexible assignment - Assign waivers by location, program, or class
+8. Acceptance tracking - Complete audit trail with IP, timestamp, version
+---
+
+

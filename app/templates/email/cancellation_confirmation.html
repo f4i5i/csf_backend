@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cancellation Confirmation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background-color: #9E9E9E;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            border-radius: 5px 5px 0 0;
+        }
+        .content {
+            background-color: #f9f9f9;
+            padding: 30px;
+            border: 1px solid #ddd;
+            border-radius: 0 0 5px 5px;
+        }
+        .cancellation-details {
+            background-color: white;
+            padding: 25px;
+            margin: 20px 0;
+            border-radius: 5px;
+            border-left: 4px solid #9E9E9E;
+        }
+        .detail-row {
+            margin: 15px 0;
+            padding: 10px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        .detail-row strong {
+            color: #666;
+            display: inline-block;
+            width: 150px;
+        }
+        .refund-box {
+            background-color: #E8F5E9;
+            border-left: 4px solid #4CAF50;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 3px;
+            text-align: center;
+        }
+        .refund-amount {
+            font-size: 2em;
+            color: #4CAF50;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .info-box {
+            background-color: #FFF9C4;
+            border-left: 4px solid #FBC02D;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 3px;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 30px;
+            background-color: #2196F3;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Cancellation Confirmed</h1>
+    </div>
+    <div class="content">
+        <p>Hi {{ user_name }},</p>
+
+        <p>We've received and processed your cancellation request. We're sorry to see you go!</p>
+
+        <div class="cancellation-details">
+            <h2>Cancellation Details</h2>
+
+            <div class="detail-row">
+                <strong>Child:</strong> {{ child_name }}
+            </div>
+
+            <div class="detail-row">
+                <strong>Program:</strong> {{ class_name }}
+            </div>
+
+            <div class="detail-row">
+                <strong>Cancelled On:</strong> {{ cancellation_date }}
+            </div>
+
+            {% if effective_date %}
+            <div class="detail-row">
+                <strong>Effective Date:</strong> {{ effective_date }}
+            </div>
+            {% endif %}
+        </div>
+
+        {% if refund_amount %}
+        <div class="refund-box">
+            <p><strong>Refund Amount</strong></p>
+            <div class="refund-amount">{{ refund_amount }}</div>
+            <p style="font-size: 0.9em; color: #666; margin-top: 10px;">
+                The refund will be processed to your original payment method within 5-10 business days.
+            </p>
+        </div>
+        {% endif %}
+
+        <div class="info-box">
+            <p><strong>What Happens Next:</strong></p>
+            <ul style="margin: 10px 0;">
+                {% if refund_amount %}
+                <li>Refund will be processed within 5-10 business days</li>
+                {% endif %}
+                {% if effective_date %}
+                <li>Your enrollment remains active until {{ effective_date }}</li>
+                <li>No additional charges will be made after this date</li>
+                {% else %}
+                <li>Your enrollment has been immediately terminated</li>
+                {% endif %}
+                <li>You'll receive a separate email once the refund is processed</li>
+            </ul>
+        </div>
+
+        <center>
+            <a href="{{ frontend_url }}/programs" class="button">Browse Other Programs</a>
+        </center>
+
+        <p>We hope to see {{ child_name }} again in the future! If you have any feedback about your experience or if there's anything we could have done better, please let us know.</p>
+
+        <p>If you have any questions about this cancellation or the refund process, please don't hesitate to contact us.</p>
+
+        <p>Best regards,<br>
+        CSF Team</p>
+    </div>
+
+    <div class="footer">
+        <p>This is an automated email. Please do not reply directly to this message.</p>
+        <p>Contact us at support@csf.com</p>
+    </div>
+</body>
+</html>
