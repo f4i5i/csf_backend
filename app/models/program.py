@@ -5,13 +5,13 @@ from sqlalchemy import Boolean, ForeignKey, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.class_ import Class
 
 
-class Program(Base, TimestampMixin):
+class Program(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Program model representing sports programs (e.g., Basketball, Soccer)."""
 
     __tablename__ = "programs"
@@ -65,7 +65,7 @@ class Program(Base, TimestampMixin):
         return program
 
 
-class Area(Base, TimestampMixin):
+class Area(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Area model representing geographic regions."""
 
     __tablename__ = "areas"
@@ -115,7 +115,7 @@ class Area(Base, TimestampMixin):
         return area
 
 
-class School(Base, TimestampMixin):
+class School(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """School model representing class locations."""
 
     __tablename__ = "schools"
@@ -124,12 +124,13 @@ class School(Base, TimestampMixin):
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # Ledger code
     address: Mapped[str] = mapped_column(String(500), nullable=False)
     city: Mapped[str] = mapped_column(String(100), nullable=False)
     state: Mapped[str] = mapped_column(String(50), nullable=False)
     zip_code: Mapped[str] = mapped_column(String(20), nullable=False)
     area_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("areas.id"), nullable=False
+        String(36), ForeignKey("areas.id"), nullable=False, index=True
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
@@ -173,10 +174,12 @@ class School(Base, TimestampMixin):
         state: str,
         zip_code: str,
         area_id: str,
+        code: Optional[str] = None,
     ) -> "School":
         """Create a new school."""
         school = cls(
             name=name,
+            code=code,
             address=address,
             city=city,
             state=state,

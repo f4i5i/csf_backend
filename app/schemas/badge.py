@@ -65,3 +65,22 @@ class BadgeProgressResponse(BaseSchema):
 
     enrollment_id: str
     progress: List[dict]
+
+
+class ChildBadgeStatusResponse(BaseSchema):
+    """Badge status for a child (aggregated across enrollments)."""
+
+    badge: BadgeResponse
+    is_unlocked: bool
+    awarded_at: Optional[datetime] = None
+    total_count: int = 0  # Times earned across all enrollments
+    enrollment_count: int = 0  # Number of enrollments with this badge
+
+
+class ChildBadgeSummaryResponse(BaseSchema):
+    """Summary of all badges for a child."""
+
+    child_id: str
+    badges: List[ChildBadgeStatusResponse]
+    total_unlocked: int
+    total_badges: int

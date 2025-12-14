@@ -70,7 +70,14 @@ class ChildCreate(BaseSchema):
     additional_notes: Optional[str] = None
 
     # Optional emergency contacts on creation
-    emergency_contacts: Optional[List[EmergencyContactCreate]] = None
+    emergency_contacts: Optional[List[EmergencyContactCreate]] = Field(None, max_length=3)
+
+    @field_validator("emergency_contacts")
+    @classmethod
+    def validate_emergency_contacts(cls, v: Optional[List[EmergencyContactCreate]]) -> Optional[List[EmergencyContactCreate]]:
+        if v and len(v) > 3:
+            raise ValueError("Maximum 3 emergency contacts allowed")
+        return v
 
     @field_validator("date_of_birth")
     @classmethod
@@ -121,6 +128,19 @@ class ChildUpdate(BaseSchema):
         return v
 
 
+class ChildEnrollmentInfo(BaseSchema):
+    """Schema for child's enrollment information."""
+
+    enrollment_id: str
+    class_id: str
+    class_name: str
+    school_id: Optional[str]
+    school_name: Optional[str]
+    weekdays: Optional[List[str]]
+    status: str
+    enrolled_at: Optional[datetime]
+
+
 class ChildResponse(BaseSchema):
     """Schema for child response."""
 
@@ -138,6 +158,7 @@ class ChildResponse(BaseSchema):
     # Medical info (decrypted for authorized users)
     medical_conditions: Optional[str]
     has_no_medical_conditions: bool
+    has_medical_alert: bool
 
     after_school_attendance: bool
     after_school_program: Optional[str]
@@ -155,6 +176,7 @@ class ChildResponse(BaseSchema):
     updated_at: datetime
 
     emergency_contacts: List[EmergencyContactResponse] = []
+    enrollments: List[ChildEnrollmentInfo] = []
 
 
 class ChildListResponse(BaseSchema):

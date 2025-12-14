@@ -3,6 +3,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user
@@ -48,12 +49,28 @@ async def upload_photo(
         if not category or category.class_id != class_id:
             raise ValidationException(message="Invalid category")
 
-    # Validate and save file
-    file_path, thumbnail_path, width, height, file_size = await file_service.save_photo(
+    # Read file binary data
+    file_data = await file.read()
+    file_size = len(file_data)
+    content_type = file.content_type or "image/jpeg"
+
+    # Reset file pointer and save file (for backward compatibility)
+    await file.seek(0)
+    file_path, thumbnail_path, width, height, _ = await file_service.save_photo(
         file, class_id
     )
 
-    # Create record
+    # Read thumbnail binary if exists
+    thumbnail_data = None
+    if thumbnail_path:
+        try:
+            import aiofiles
+            async with aiofiles.open(thumbnail_path, 'rb') as f:
+                thumbnail_data = await f.read()
+        except Exception as e:
+            logger.warning(f"Could not read thumbnail data: {e}")
+
+    # Create record with binary data
     photo = Photo(
         class_id=class_id,
         category_id=category_id,
@@ -61,15 +78,64 @@ async def upload_photo(
         file_name=file.filename,
         file_path=file_path,
         file_size=file_size,
+        file_data=file_data,
+        content_type=content_type,
         thumbnail_path=thumbnail_path,
+        thumbnail_data=thumbnail_data,
         width=width,
         height=height,
+        organization_id=current_user.organization_id,
     )
     db_session.add(photo)
     await db_session.commit()
     await db_session.refresh(photo)
 
     return PhotoResponse.model_validate(photo)
+
+
+@router.get("/", response_model=PhotoListResponse)
+async def list_all_photos(
+    class_id: Optional[str] = Query(None),
+    category_id: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PhotoListResponse:
+    """List all photos with optional filters."""
+    from sqlalchemy import select, and_, func
+    from sqlalchemy.orm import selectinload
+
+    conditions = [Photo.is_active == True]
+
+    if class_id:
+        conditions.append(Photo.class_id == class_id)
+    if category_id:
+        conditions.append(Photo.category_id == category_id)
+
+    stmt = (
+        select(Photo)
+        .where(and_(*conditions))
+        .options(selectinload(Photo.category))
+        .order_by(Photo.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+
+    result = await db_session.execute(stmt)
+    photos = result.scalars().all()
+
+    # Count total
+    count_stmt = select(func.count(Photo.id)).where(and_(*conditions))
+    count_result = await db_session.execute(count_stmt)
+    total = count_result.scalar() or 0
+
+    return PhotoListResponse(
+        items=[PhotoResponse.model_validate(p) for p in photos],
+        total=total,
+        skip=skip,
+        limit=limit,
+    )
 
 
 @router.get("/class/{class_id}", response_model=PhotoListResponse)
@@ -133,7 +199,10 @@ async def create_photo_category(
     if current_user.role not in [Role.COACH, Role.ADMIN, Role.OWNER]:
         raise ForbiddenException(message="Only coaches can create categories")
 
-    category = PhotoCategory(**data.model_dump())
+    category = PhotoCategory(
+        **data.model_dump(),
+        organization_id=current_user.organization_id
+    )
     db_session.add(category)
     await db_session.commit()
     await db_session.refresh(category)
@@ -149,4 +218,60 @@ async def list_photo_categories(
     categories = await PhotoCategory.get_by_class(db_session, class_id)
     return PhotoCategoryListResponse(
         items=[PhotoCategoryResponse.model_validate(c) for c in categories]
+    )
+
+
+@router.get("/{photo_id}/image")
+async def get_photo_image(
+    photo_id: str,
+    db_session: AsyncSession = Depends(get_db),
+) -> Response:
+    """Get photo image binary data for display."""
+    photo = await Photo.get_by_id(db_session, photo_id)
+    if not photo:
+        raise NotFoundException(message="Photo not found")
+
+    if not photo.file_data:
+        raise NotFoundException(message="Photo data not available")
+
+    return Response(
+        content=photo.file_data,
+        media_type=photo.content_type or "image/jpeg",
+        headers={
+            "Content-Disposition": f'inline; filename="{photo.file_name}"',
+            "Cache-Control": "public, max-age=31536000",
+        },
+    )
+
+
+@router.get("/{photo_id}/thumbnail")
+async def get_photo_thumbnail(
+    photo_id: str,
+    db_session: AsyncSession = Depends(get_db),
+) -> Response:
+    """Get photo thumbnail binary data for display."""
+    photo = await Photo.get_by_id(db_session, photo_id)
+    if not photo:
+        raise NotFoundException(message="Photo not found")
+
+    if not photo.thumbnail_data:
+        # Fallback to full image if no thumbnail
+        if photo.file_data:
+            return Response(
+                content=photo.file_data,
+                media_type=photo.content_type or "image/jpeg",
+                headers={
+                    "Content-Disposition": f'inline; filename="thumb_{photo.file_name}"',
+                    "Cache-Control": "public, max-age=31536000",
+                },
+            )
+        raise NotFoundException(message="Thumbnail not available")
+
+    return Response(
+        content=photo.thumbnail_data,
+        media_type=photo.content_type or "image/jpeg",
+        headers={
+            "Content-Disposition": f'inline; filename="thumb_{photo.file_name}"',
+            "Cache-Control": "public, max-age=31536000",
+        },
     )

@@ -198,6 +198,58 @@ async def get_required_waivers(
     )
 
 
+@router.get("/pending", response_model=WaiverStatusListResponse)
+async def get_pending_waivers(
+    program_id: Optional[str] = None,
+    school_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db_session: AsyncSession = Depends(get_db),
+) -> WaiverStatusListResponse:
+    """
+    Get only pending (not accepted or needs re-consent) waivers.
+
+    Returns only waivers requiring action:
+    - Never accepted, OR
+    - Version changed and needs re-consent
+    """
+    logger.info(f"Get pending waivers for user: {current_user.id}")
+
+    # Get all required waivers for context
+    templates = await WaiverTemplate.get_active_waivers(
+        db_session, program_id=program_id, school_id=school_id
+    )
+
+    pending_items = []
+
+    for template in templates:
+        # Check if needs action
+        needs_reconsent = await WaiverAcceptance.needs_reconsent(
+            db_session, current_user.id, template
+        )
+
+        if needs_reconsent:
+            # Get acceptance if exists
+            acceptance = await WaiverAcceptance.get_user_acceptance_for_waiver(
+                db_session, current_user.id, template.id
+            )
+
+            status = WaiverStatusResponse(
+                waiver_template=WaiverTemplateResponse.model_validate(template),
+                is_accepted=acceptance is not None,
+                acceptance=(
+                    WaiverAcceptanceResponse.model_validate(acceptance) if acceptance else None
+                ),
+                needs_reconsent=True,
+            )
+            pending_items.append(status)
+
+    return WaiverStatusListResponse(
+        items=pending_items,
+        pending_count=len(pending_items),
+        total=len(pending_items),
+    )
+
+
 @router.post("/accept", response_model=WaiverAcceptanceResponse)
 async def accept_waiver(
     data: WaiverAcceptanceCreate,

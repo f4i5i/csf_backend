@@ -86,3 +86,4 @@ alembic/versions/*.pyc
 # Secrets
 *.pem
 *.key
+/.claude/

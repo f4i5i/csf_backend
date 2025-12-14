@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     UniqueConstraint,
     select,
@@ -15,14 +16,14 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.class_ import Class
     from app.models.user import User
 
 
-class PhotoCategory(Base, TimestampMixin):
+class PhotoCategory(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Photo category for organizing class photos."""
 
     __tablename__ = "photo_categories"
@@ -43,7 +44,12 @@ class PhotoCategory(Base, TimestampMixin):
     )
 
     __table_args__ = (
-        UniqueConstraint("class_id", "name", name="unique_class_category"),
+        UniqueConstraint(
+            "organization_id",
+            "class_id",
+            "name",
+            name="uq_photo_categories_organization_class_name",
+        ),
     )
 
     @classmethod
@@ -68,7 +74,7 @@ class PhotoCategory(Base, TimestampMixin):
         return result.scalars().all()
 
 
-class Photo(Base, TimestampMixin):
+class Photo(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Photo model for class gallery."""
 
     __tablename__ = "photos"
@@ -83,12 +89,15 @@ class Photo(Base, TimestampMixin):
         String(36), ForeignKey("photo_categories.id"), nullable=True, index=True
     )
     uploaded_by: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
+        String(36), ForeignKey("users.id"), nullable=False, index=True
     )
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(500), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     thumbnail_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    thumbnail_data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
     width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

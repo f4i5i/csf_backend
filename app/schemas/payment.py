@@ -112,10 +112,10 @@ class InstallmentSchedulePreview(BaseSchema):
 
 
 class InstallmentPlanCreate(BaseSchema):
-    """Create an installment plan."""
+    """Create an installment plan (maximum 2 payments)."""
 
     order_id: str
-    num_installments: int = Field(..., ge=2, le=12)
+    num_installments: int = Field(..., ge=2, le=2)  # Max 2 installments
     frequency: str = Field(..., pattern="^(weekly|biweekly|monthly)$")
     payment_method_id: str
 
@@ -149,6 +149,18 @@ class InstallmentPaymentResponse(BaseSchema):
     status: str
     paid_at: Optional[datetime] = None
     attempt_count: int
+
+
+class InstallmentSummaryResponse(BaseSchema):
+    """Summary of all installment plans for current user."""
+
+    active_plans_count: int = 0
+    completed_plans_count: int = 0
+    cancelled_plans_count: int = 0
+    total_amount_owed: Decimal = Decimal("0.00")  # Sum of pending installments
+    next_payment_amount: Optional[Decimal] = None
+    next_payment_due: Optional[date] = None
+    total_paid_count: int = 0  # Number of paid installments across all plans
 
 
 # ============== Refund Schemas ==============

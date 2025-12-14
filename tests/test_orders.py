@@ -174,19 +174,19 @@ class TestPricingService:
     """Tests for pricing service calculations."""
 
     async def test_installment_schedule(self, db_session):
-        """Test installment schedule generation."""
+        """Test installment schedule generation (max 2 payments)."""
         from app.services.pricing_service import PricingService
 
         schedule = PricingService.calculate_installment_schedule(
             total=Decimal("300.00"),
-            num_installments=3,
+            num_installments=2,  # Max 2 installments
             start_date=date.today(),
             frequency="monthly",
         )
 
-        assert len(schedule) == 3
+        assert len(schedule) == 2
         assert schedule[0].installment_number == 1
-        assert schedule[0].amount == Decimal("100.00")
+        assert schedule[0].amount == Decimal("150.00")
 
         # Verify total equals original amount
         total = sum(item.amount for item in schedule)
@@ -202,8 +202,8 @@ class TestPricingService:
             enrolled_at=enrolled_at,
         )
 
-        # Within 15 days: full refund minus $25 processing fee
-        assert refund == Decimal("175.00")
+        # Within 15 days: full refund with no processing fee
+        assert refund == Decimal("200.00")
         assert "15 days" in policy.lower()
 
     async def test_cancellation_refund_after_15_days(self, db_session):

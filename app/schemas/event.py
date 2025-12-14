@@ -54,6 +54,7 @@ class EventListResponse(BaseSchema):
     """Schema for event list response."""
 
     items: List[EventResponse]
+    total: int = 0
 
 
 class CalendarViewResponse(BaseSchema):

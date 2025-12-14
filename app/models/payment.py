@@ -21,7 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.order import Order
@@ -47,7 +47,16 @@ class PaymentStatus(str, enum.Enum):
     PARTIALLY_REFUNDED = "partially_refunded"
 
 
-class Payment(Base, TimestampMixin):
+class RefundStatus(str, enum.Enum):
+    """Status of a refund request."""
+
+    NOT_REQUESTED = "not_requested"
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class Payment(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Payment record for transactions."""
 
     __tablename__ = "payments"
@@ -96,9 +105,38 @@ class Payment(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # Refund approval workflow
+    refund_status: Mapped[RefundStatus] = mapped_column(
+        Enum(RefundStatus), default=RefundStatus.NOT_REQUESTED, nullable=False, index=True
+    )
+    refund_requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    refund_approved_by_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    refund_approved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    refund_rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Payment retry system
+    retry_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_retry_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Relationships
     order: Mapped["Order"] = relationship("Order")
-    user: Mapped["User"] = relationship("User")
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
+    refund_approved_by: Mapped[Optional["User"]] = relationship(
+        "User", foreign_keys=[refund_approved_by_id]
+    )
 
     @classmethod
     async def get_by_id(
@@ -161,10 +199,130 @@ class Payment(Base, TimestampMixin):
         await db_session.commit()
 
     async def mark_failed(self, db_session: AsyncSession, reason: str = None) -> None:
-        """Mark payment as failed."""
+        """Mark payment as failed and schedule retry if eligible."""
         self.status = PaymentStatus.FAILED
         self.failure_reason = reason
         await db_session.commit()
+
+        # Schedule retry if eligible (has payment intent and not at max retries)
+        if self.can_retry:
+            await self.schedule_retry(db_session)
+
+    async def request_refund(self, db_session: AsyncSession, amount: Decimal) -> None:
+        """Request a refund (pending admin approval)."""
+        self.refund_status = RefundStatus.PENDING
+        self.refund_amount = amount
+        self.refund_requested_at = func.now()
+        await db_session.commit()
+
+    async def approve_refund(
+        self, db_session: AsyncSession, approved_by_id: str
+    ) -> None:
+        """Approve a pending refund request."""
+        if self.refund_status != RefundStatus.PENDING:
+            raise ValueError("Can only approve pending refund requests")
+
+        self.refund_status = RefundStatus.APPROVED
+        self.refund_approved_by_id = approved_by_id
+        self.refund_approved_at = func.now()
+        # Update payment status
+        if self.refund_amount >= self.amount:
+            self.status = PaymentStatus.REFUNDED
+        else:
+            self.status = PaymentStatus.PARTIALLY_REFUNDED
+        await db_session.commit()
+
+    async def reject_refund(
+        self, db_session: AsyncSession, approved_by_id: str, reason: str = None
+    ) -> None:
+        """Reject a pending refund request."""
+        if self.refund_status != RefundStatus.PENDING:
+            raise ValueError("Can only reject pending refund requests")
+
+        self.refund_status = RefundStatus.REJECTED
+        self.refund_approved_by_id = approved_by_id
+        self.refund_approved_at = func.now()
+        self.refund_rejection_reason = reason
+        # Reset refund amount since rejected
+        self.refund_amount = Decimal("0.00")
+        await db_session.commit()
+
+    @classmethod
+    async def get_pending_refunds(
+        cls, db_session: AsyncSession, limit: int = 100
+    ) -> Sequence["Payment"]:
+        """Get all payments with pending refund requests."""
+        result = await db_session.execute(
+            select(cls)
+            .where(cls.refund_status == RefundStatus.PENDING)
+            .order_by(cls.refund_requested_at.desc())
+            .limit(limit)
+        )
+        return result.scalars().all()
+
+    async def schedule_retry(self, db_session: AsyncSession) -> None:
+        """Schedule next retry attempt with exponential backoff."""
+        from datetime import timedelta
+
+        MAX_RETRIES = 3
+
+        if self.retry_count >= MAX_RETRIES:
+            # Max retries reached, don't schedule more
+            return
+
+        # Exponential backoff: 1 hour, 4 hours, 12 hours
+        retry_delays = {
+            0: timedelta(hours=1),   # First retry after 1 hour
+            1: timedelta(hours=4),   # Second retry after 4 hours
+            2: timedelta(hours=12),  # Third retry after 12 hours
+        }
+
+        delay = retry_delays.get(self.retry_count, timedelta(hours=24))
+
+        self.next_retry_at = datetime.now(datetime.UTC) + delay
+        await db_session.commit()
+
+    async def record_retry_attempt(self, db_session: AsyncSession) -> None:
+        """Record that a retry attempt was made."""
+        self.retry_count += 1
+        self.last_retry_at = func.now()
+        self.next_retry_at = None  # Clear scheduled retry
+        await db_session.commit()
+
+    @classmethod
+    async def get_payments_due_for_retry(
+        cls, db_session: AsyncSession
+    ) -> Sequence["Payment"]:
+        """Get payments that are due for retry."""
+        now = datetime.now(datetime.UTC)
+        result = await db_session.execute(
+            select(cls)
+            .where(
+                cls.status == PaymentStatus.FAILED,
+                cls.next_retry_at.isnot(None),
+                cls.next_retry_at <= now,
+                cls.retry_count < 3,  # Max 3 retries
+            )
+            .options(selectinload(cls.user), selectinload(cls.order))
+            .order_by(cls.next_retry_at)
+        )
+        return result.scalars().all()
+
+    @property
+    def can_retry(self) -> bool:
+        """Check if payment can be retried."""
+        MAX_RETRIES = 3
+        return (
+            self.status == PaymentStatus.FAILED
+            and self.retry_count < MAX_RETRIES
+            and self.stripe_payment_intent_id is not None
+        )
+
+    @property
+    def max_retries_reached(self) -> bool:
+        """Check if maximum retry attempts have been reached."""
+        MAX_RETRIES = 3
+        return self.retry_count >= MAX_RETRIES
 
 
 class InstallmentPlanStatus(str, enum.Enum):
@@ -184,7 +342,7 @@ class InstallmentFrequency(str, enum.Enum):
     MONTHLY = "monthly"
 
 
-class InstallmentPlan(Base, TimestampMixin):
+class InstallmentPlan(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Installment plan for split payments."""
 
     __tablename__ = "installment_plans"
@@ -288,7 +446,7 @@ class InstallmentPaymentStatus(str, enum.Enum):
     SKIPPED = "skipped"
 
 
-class InstallmentPayment(Base, TimestampMixin):
+class InstallmentPayment(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Individual installment payment record."""
 
     __tablename__ = "installment_payments"
@@ -297,10 +455,10 @@ class InstallmentPayment(Base, TimestampMixin):
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     installment_plan_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("installment_plans.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey("installment_plans.id", ondelete="CASCADE"), nullable=False, index=True
     )
     payment_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("payments.id"), nullable=True
+        String(36), ForeignKey("payments.id"), nullable=True, index=True
     )
 
     # Payment details

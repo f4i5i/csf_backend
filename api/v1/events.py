@@ -35,12 +35,72 @@ async def create_event(
     if current_user.role not in [Role.COACH, Role.ADMIN, Role.OWNER]:
         raise ForbiddenException(message="Only coaches can create events")
 
-    event = Event(**data.model_dump(), created_by=current_user.id)
+    event = Event(
+        **data.model_dump(),
+        created_by=current_user.id,
+        organization_id=current_user.organization_id
+    )
     db_session.add(event)
     await db_session.commit()
     await db_session.refresh(event)
 
     return EventResponse.model_validate(event)
+
+
+@router.get("/", response_model=EventListResponse)
+async def list_all_events(
+    class_id: Optional[str] = Query(None),
+    event_type: Optional[str] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    is_active: bool = Query(True),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> EventListResponse:
+    """List all events with optional filters."""
+    from sqlalchemy import select, and_, func
+    from app.models.event import EventType
+    from core.exceptions.base import ValidationException
+
+    conditions = [Event.is_active == is_active]
+
+    if class_id:
+        conditions.append(Event.class_id == class_id)
+
+    if event_type:
+        try:
+            event_type_enum = EventType(event_type)
+            conditions.append(Event.event_type == event_type_enum)
+        except ValueError:
+            raise ValidationException(message=f"Invalid event_type: {event_type}")
+
+    if start_date:
+        conditions.append(Event.event_date >= start_date)
+    if end_date:
+        conditions.append(Event.event_date <= end_date)
+
+    stmt = (
+        select(Event)
+        .where(and_(*conditions))
+        .order_by(Event.event_date.desc(), Event.start_time)
+        .offset(skip)
+        .limit(limit)
+    )
+
+    result = await db_session.execute(stmt)
+    events = result.scalars().all()
+
+    # Count total
+    count_stmt = select(func.count(Event.id)).where(and_(*conditions))
+    count_result = await db_session.execute(count_stmt)
+    total = count_result.scalar() or 0
+
+    return EventListResponse(
+        items=[EventResponse.model_validate(e) for e in events],
+        total=total,
+    )
 
 
 @router.get("/class/{class_id}", response_model=EventListResponse)
@@ -59,7 +119,10 @@ async def list_events(
     else:
         events = await Event.get_by_class(db_session, class_id)
 
-    return EventListResponse(items=[EventResponse.model_validate(e) for e in events])
+    return EventListResponse(
+        items=[EventResponse.model_validate(e) for e in events],
+        total=len(events),
+    )
 
 
 @router.get("/calendar", response_model=CalendarViewResponse)

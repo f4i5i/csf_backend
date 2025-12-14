@@ -13,7 +13,7 @@ from app.models.child import Child
 from app.models.class_ import Class
 from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.models.order import Order, OrderStatus
-from app.models.payment import Payment, PaymentStatus, PaymentType
+from app.models.payment import Payment, PaymentStatus, PaymentType, RefundStatus
 from app.models.program import Area, Program, School
 from app.models.user import Role, User
 from app.schemas.admin import (
@@ -21,6 +21,11 @@ from app.schemas.admin import (
     ClientDetailResponse,
     ClientListResponse,
     DashboardMetricsResponse,
+    PendingRefundResponse,
+    PendingRefundsListResponse,
+    RefundApprovalRequest,
+    RefundItemResponse,
+    RefundSearchResponse,
     RevenueReportResponse,
     RosterStudentResponse,
 )
@@ -498,6 +503,284 @@ async def get_class_roster(
         current_enrollment=class_.current_enrollment,
         students=students,
     )
+
+
+@router.get("/refunds/search", response_model=RefundSearchResponse)
+async def search_refunds(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    start_date: Optional[date] = Query(None, description="Filter by refund date (start)"),
+    end_date: Optional[date] = Query(None, description="Filter by refund date (end)"),
+    user_id: Optional[str] = Query(None, description="Filter by user ID"),
+    min_amount: Optional[float] = Query(None, ge=0, description="Minimum refund amount"),
+    max_amount: Optional[float] = Query(None, ge=0, description="Maximum refund amount"),
+    payment_status: Optional[str] = Query(None, description="Payment status filter"),
+    db_session: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin),
+) -> RefundSearchResponse:
+    """Search and filter refunded payments.
+
+    Filters:
+    - Date range (start_date, end_date) - filters by payment created_at
+    - User ID - filter refunds for specific user
+    - Amount range (min_amount, max_amount) - filters by refund_amount
+    - Payment status - filter by payment status (refunded, partially_refunded)
+
+    Returns:
+    - Paginated list of refunds with order and user details
+    - Total count and sum of refunds
+    """
+    logger.info(f"Searching refunds by admin: {current_admin.id}")
+
+    from decimal import Decimal
+    from sqlalchemy.orm import joinedload
+
+    # Build base query - only payments with refund_amount > 0
+    stmt = (
+        select(Payment)
+        .options(
+            joinedload(Payment.order),
+            joinedload(Payment.user)
+        )
+        .where(Payment.refund_amount > 0)
+    )
+
+    # Apply date range filter
+    if start_date:
+        stmt = stmt.where(func.date(Payment.created_at) >= start_date)
+    if end_date:
+        stmt = stmt.where(func.date(Payment.created_at) <= end_date)
+
+    # Apply user filter
+    if user_id:
+        stmt = stmt.where(Payment.user_id == user_id)
+
+    # Apply amount range filter
+    if min_amount is not None:
+        stmt = stmt.where(Payment.refund_amount >= Decimal(str(min_amount)))
+    if max_amount is not None:
+        stmt = stmt.where(Payment.refund_amount <= Decimal(str(max_amount)))
+
+    # Apply status filter
+    if payment_status:
+        if payment_status.lower() == "refunded":
+            stmt = stmt.where(Payment.status == PaymentStatus.REFUNDED)
+        elif payment_status.lower() == "partially_refunded":
+            stmt = stmt.where(Payment.status == PaymentStatus.PARTIALLY_REFUNDED)
+
+    # Get total count
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db_session.execute(count_stmt)
+    total = total_result.scalar() or 0
+
+    # Get total refunded amount for the filtered results
+    sum_stmt = select(func.coalesce(func.sum(Payment.refund_amount), 0)).select_from(stmt.subquery())
+    sum_result = await db_session.execute(sum_stmt)
+    total_refunded = float(sum_result.scalar() or 0)
+
+    # Apply pagination and get results
+    stmt = stmt.order_by(Payment.created_at.desc()).offset(skip).limit(limit)
+    result = await db_session.execute(stmt)
+    payments = result.scalars().all()
+
+    # Format response with order details
+    items = []
+    for payment in payments:
+        # Get order line items with class/enrollment info
+        order_items = []
+        if payment.order:
+            from app.models.order import OrderLineItem
+            line_items_result = await db_session.execute(
+                select(OrderLineItem, Class)
+                .outerjoin(Enrollment, Enrollment.id == OrderLineItem.enrollment_id)
+                .outerjoin(Class, Class.id == Enrollment.class_id)
+                .where(OrderLineItem.order_id == payment.order_id)
+            )
+            for line_item, class_ in line_items_result.all():
+                order_items.append({
+                    "description": line_item.description,
+                    "quantity": line_item.quantity,
+                    "unit_price": float(line_item.unit_price),
+                    "total_price": float(line_item.total_price),
+                    "class_name": class_.name if class_ else None,
+                    "enrollment_id": line_item.enrollment_id,
+                })
+
+        items.append(RefundItemResponse(
+            payment_id=payment.id,
+            order_id=payment.order_id,
+            user_id=payment.user_id,
+            user_email=payment.user.email,
+            user_name=payment.user.full_name,
+            original_amount=float(payment.amount),
+            refund_amount=float(payment.refund_amount),
+            payment_status=payment.status.value,
+            payment_type=payment.payment_type.value,
+            refunded_at=payment.updated_at,  # Using updated_at as refund timestamp
+            created_at=payment.created_at,
+            order_items=order_items,
+        ))
+
+    return RefundSearchResponse(
+        items=items,
+        total=total,
+        skip=skip,
+        limit=limit,
+        total_refunded=total_refunded,
+    )
+
+
+@router.get("/refunds/pending", response_model=PendingRefundsListResponse)
+async def list_pending_refunds(
+    db_session: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin),
+) -> PendingRefundsListResponse:
+    """Get all pending refund requests awaiting admin approval.
+
+    Returns:
+    - List of payments with pending refund requests
+    - User and order details for each refund
+    """
+    logger.info(f"Listing pending refunds by admin: {current_admin.id}")
+
+    from sqlalchemy.orm import joinedload
+
+    # Get pending refunds with user and order details
+    result = await db_session.execute(
+        select(Payment)
+        .options(
+            joinedload(Payment.user),
+            joinedload(Payment.order)
+        )
+        .where(Payment.refund_status == RefundStatus.PENDING)
+        .order_by(Payment.refund_requested_at.desc())
+    )
+    pending_payments = result.scalars().all()
+
+    # Format response
+    items = []
+    for payment in pending_payments:
+        # Get brief order details
+        order_details = None
+        if payment.order:
+            from app.models.order import OrderLineItem
+            line_items_result = await db_session.execute(
+                select(OrderLineItem)
+                .where(OrderLineItem.order_id == payment.order_id)
+                .limit(3)
+            )
+            line_items = line_items_result.scalars().all()
+            order_details = "; ".join(
+                [f"{item.description} (${item.total_price})" for item in line_items]
+            )
+
+        items.append(PendingRefundResponse(
+            payment_id=payment.id,
+            order_id=payment.order_id,
+            user_id=payment.user_id,
+            user_email=payment.user.email,
+            user_name=payment.user.full_name,
+            original_amount=float(payment.amount),
+            refund_amount=float(payment.refund_amount),
+            refund_requested_at=payment.refund_requested_at,
+            payment_type=payment.payment_type.value,
+            order_details=order_details,
+        ))
+
+    return PendingRefundsListResponse(
+        items=items,
+        total=len(items),
+    )
+
+
+@router.post("/refunds/{payment_id}/approve")
+async def approve_refund(
+    payment_id: str,
+    db_session: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin),
+) -> dict:
+    """Approve a pending refund request.
+
+    This will:
+    - Mark the refund as approved
+    - Update payment status to REFUNDED or PARTIALLY_REFUNDED
+    - Trigger actual refund processing (Stripe integration)
+    - Send email notification to user
+    """
+    logger.info(f"Approving refund for payment {payment_id} by admin: {current_admin.id}")
+
+    payment = await Payment.get_by_id(db_session, payment_id)
+    if not payment:
+        raise NotFoundException(f"Payment {payment_id} not found")
+
+    if payment.refund_status != RefundStatus.PENDING:
+        from core.exceptions.base import BadRequestException
+        raise BadRequestException(
+            message=f"Cannot approve refund with status: {payment.refund_status.value}"
+        )
+
+    await payment.approve_refund(db_session, current_admin.id)
+
+    logger.info(
+        f"Refund approved: ${payment.refund_amount} for payment {payment_id} "
+        f"by {current_admin.full_name}"
+    )
+
+    # TODO: Trigger actual Stripe refund processing here
+    # TODO: Send email notification to user
+
+    return {
+        "message": "Refund approved successfully",
+        "payment_id": payment.id,
+        "refund_amount": float(payment.refund_amount),
+        "approved_by": current_admin.full_name,
+    }
+
+
+@router.post("/refunds/{payment_id}/reject")
+async def reject_refund(
+    payment_id: str,
+    data: RefundApprovalRequest,
+    db_session: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(get_current_admin),
+) -> dict:
+    """Reject a pending refund request.
+
+    Requires a rejection reason for user transparency.
+    """
+    logger.info(f"Rejecting refund for payment {payment_id} by admin: {current_admin.id}")
+
+    payment = await Payment.get_by_id(db_session, payment_id)
+    if not payment:
+        raise NotFoundException(f"Payment {payment_id} not found")
+
+    if payment.refund_status != RefundStatus.PENDING:
+        from core.exceptions.base import BadRequestException
+        raise BadRequestException(
+            message=f"Cannot reject refund with status: {payment.refund_status.value}"
+        )
+
+    if not data.rejection_reason:
+        from core.exceptions.base import BadRequestException
+        raise BadRequestException(
+            message="Rejection reason is required"
+        )
+
+    await payment.reject_refund(db_session, current_admin.id, data.rejection_reason)
+
+    logger.info(
+        f"Refund rejected for payment {payment_id} by {current_admin.full_name}. "
+        f"Reason: {data.rejection_reason}"
+    )
+
+    # TODO: Send email notification to user with rejection reason
+
+    return {
+        "message": "Refund rejected",
+        "payment_id": payment.id,
+        "rejected_by": current_admin.full_name,
+        "reason": data.rejection_reason,
+    }
 
 
 # Singleton export

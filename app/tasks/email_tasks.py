@@ -381,3 +381,154 @@ async def _send_upcoming_installment_reminders_async() -> Dict[str, Any]:
         )
 
         return {"success": True, "sent": sent_count, "failed": failed_count}
+
+
+# ============== Payment Retry Email Tasks ==============
+
+
+@celery_app.task(name="send_payment_retry_success_email")
+def send_payment_retry_success_email(
+    user_email: str,
+    user_name: str,
+    amount: str,
+    retry_attempt: int,
+    transaction_id: str,
+) -> bool:
+    """Send email notification when payment retry succeeds."""
+    try:
+        subject = f"Payment Successful (Retry Attempt {retry_attempt})"
+
+        body = f"""
+        <h2>Payment Successful!</h2>
+        <p>Hello {user_name},</p>
+
+        <p>Great news! Your payment has been successfully processed on retry attempt {retry_attempt} of 3.</p>
+
+        <p><strong>Payment Details:</strong></p>
+        <ul>
+            <li>Amount: ${amount}</li>
+            <li>Transaction ID: {transaction_id}</li>
+            <li>Retry Attempt: {retry_attempt} of 3</li>
+        </ul>
+
+        <p>Thank you for your patience. Your enrollment is now fully confirmed.</p>
+
+        <p>Best regards,<br>The CSF Team</p>
+        """
+
+        return send_email(
+            to_email=user_email,
+            subject=subject,
+            html_content=body,
+        )
+
+    except Exception as e:
+        logger.error(f"Error sending payment retry success email: {str(e)}")
+        return False
+
+
+@celery_app.task(name="send_payment_retry_failed_email")
+def send_payment_retry_failed_email(
+    user_email: str,
+    user_name: str,
+    amount: str,
+    retry_attempt: int,
+    max_retries: int,
+    failure_reason: str,
+) -> bool:
+    """Send email notification when payment retry fails."""
+    try:
+        retries_remaining = max_retries - retry_attempt
+
+        if retries_remaining > 0:
+            subject = f"Payment Retry Failed - {retries_remaining} Attempt(s) Remaining"
+            next_steps = f"<p>We will automatically retry this payment. You have <strong>{retries_remaining} more attempt(s)</strong> remaining.</p>"
+        else:
+            subject = "Payment Failed - Maximum Retries Reached"
+            next_steps = "<p><strong>Maximum retry attempts reached.</strong> Please update your payment method or contact support.</p>"
+
+        body = f"""
+        <h2>Payment Retry Failed</h2>
+        <p>Hello {user_name},</p>
+
+        <p>We attempted to process your payment but it was unsuccessful.</p>
+
+        <p><strong>Payment Details:</strong></p>
+        <ul>
+            <li>Amount: ${amount}</li>
+            <li>Retry Attempt: {retry_attempt} of {max_retries}</li>
+            <li>Reason: {failure_reason}</li>
+        </ul>
+
+        {next_steps}
+
+        <p><strong>What you can do:</strong></p>
+        <ul>
+            <li>Update your payment method in your account settings</li>
+            <li>Contact your bank to ensure the card is active and has sufficient funds</li>
+            <li>Contact us if you need assistance</li>
+        </ul>
+
+        <p>Best regards,<br>The CSF Team</p>
+        """
+
+        return send_email(
+            to_email=user_email,
+            subject=subject,
+            html_content=body,
+        )
+
+    except Exception as e:
+        logger.error(f"Error sending payment retry failed email: {str(e)}")
+        return False
+
+
+@celery_app.task(name="send_payment_max_retries_admin_notification")
+def send_payment_max_retries_admin_notification(
+    payment_id: str,
+    user_email: str,
+    user_name: str,
+    amount: str,
+    order_id: Optional[str] = None,
+) -> bool:
+    """Send admin notification when payment reaches max retry attempts."""
+    try:
+        # TODO: Get admin email from settings
+        admin_email = "admin@csf.com"  # Replace with actual admin email
+
+        subject = f"Action Required: Payment Failed After 3 Retry Attempts"
+
+        body = f"""
+        <h2>Payment Failed - Maximum Retries Reached</h2>
+        <p>A payment has failed after 3 automatic retry attempts.</p>
+
+        <p><strong>Payment Details:</strong></p>
+        <ul>
+            <li>Payment ID: {payment_id}</li>
+            <li>Order ID: {order_id or 'N/A'}</li>
+            <li>User: {user_name} ({user_email})</li>
+            <li>Amount: ${amount}</li>
+            <li>Retry Attempts: 3 of 3 (Maximum Reached)</li>
+        </ul>
+
+        <p><strong>Action Required:</strong></p>
+        <ul>
+            <li>Contact the user to resolve payment issue</li>
+            <li>Review enrollment status and determine next steps</li>
+            <li>Consider manual payment processing if needed</li>
+        </ul>
+
+        <p>View payment details in the admin portal.</p>
+
+        <p>Best regards,<br>CSF System</p>
+        """
+
+        return send_email(
+            to_email=admin_email,
+            subject=subject,
+            html_content=body,
+        )
+
+    except Exception as e:
+        logger.error(f"Error sending admin max retries notification: {str(e)}")
+        return False

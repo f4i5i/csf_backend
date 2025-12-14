@@ -1,10 +1,12 @@
 """Payment API endpoints for managing payment methods and transactions."""
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.deps import get_current_admin, get_current_user
+from api.deps import get_current_admin, get_current_parent_or_admin, get_current_user
+from app.models.order import Order
 from app.models.payment import Payment
 from app.models.user import User
 from app.schemas.payment import (
@@ -16,9 +18,10 @@ from app.schemas.payment import (
     RefundResponse,
     SetupIntentResponse,
 )
+from app.services.invoice_service import InvoiceService
 from app.services.stripe_service import stripe_service, StripeService
 from core.db import get_db
-from core.exceptions.base import BadRequestException, NotFoundException
+from core.exceptions.base import BadRequestException, ForbiddenException, NotFoundException
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -31,7 +34,7 @@ router = APIRouter(prefix="/payments", tags=["Payments"])
 
 @router.post("/setup-intent", response_model=SetupIntentResponse)
 async def create_setup_intent(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
 ) -> SetupIntentResponse:
     """
     Create a SetupIntent to save a payment method.
@@ -62,7 +65,7 @@ async def create_setup_intent(
 
 @router.get("/methods", response_model=PaymentMethodListResponse)
 async def list_payment_methods(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
 ) -> PaymentMethodListResponse:
     """
     List saved payment methods for the current user.
@@ -85,7 +88,7 @@ async def list_payment_methods(
 @router.delete("/methods/{payment_method_id}")
 async def detach_payment_method(
     payment_method_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
 ) -> dict:
     """
     Remove a saved payment method.
@@ -112,7 +115,7 @@ async def detach_payment_method(
 
 @router.get("/my", response_model=PaymentListResponse)
 async def list_my_payments(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> PaymentListResponse:
     """
@@ -138,7 +141,7 @@ async def list_my_payments(
 @router.get("/{payment_id}", response_model=PaymentResponse)
 async def get_payment(
     payment_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> PaymentResponse:
     """
@@ -258,4 +261,76 @@ async def list_all_payments(
     return PaymentListResponse(
         items=[PaymentResponse.model_validate(p) for p in payments],
         total=total,
+    )
+
+
+# ============== Invoice Download ==============
+
+
+@router.get("/{payment_id}/invoice/download")
+async def download_invoice(
+    payment_id: str,
+    current_user: User = Depends(get_current_parent_or_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """
+    Download invoice PDF for a payment.
+
+    Returns a PDF file that can be saved or viewed.
+    """
+    logger.info(f"Generate invoice for payment: {payment_id} by user: {current_user.id}")
+
+    # Get payment
+    payment = await Payment.get_by_id(db_session, payment_id)
+    if not payment:
+        raise NotFoundException(f"Payment {payment_id} not found")
+
+    # Verify user owns this payment
+    if payment.user_id != current_user.id:
+        raise ForbiddenException("You don't have permission to access this invoice")
+
+    # Get order details
+    order = await Order.get_by_id(db_session, payment.order_id)
+    if not order:
+        raise NotFoundException(f"Order {payment.order_id} not found")
+
+    # Build invoice number from payment ID
+    invoice_number = f"#INV-{payment.id[:8].upper()}"
+
+    # Build line items
+    items = []
+    if order.line_items:
+        for item in order.line_items:
+            items.append({
+                "description": "Class Enrollment",
+                "amount": item.price
+            })
+    else:
+        # Fallback if no line items
+        items.append({
+            "description": "Class Registration",
+            "amount": payment.amount
+        })
+
+    # Generate PDF
+    pdf_buffer = InvoiceService.generate_invoice_pdf(
+        invoice_number=invoice_number,
+        invoice_date=payment.paid_at or payment.created_at,
+        customer_name=f"{current_user.first_name} {current_user.last_name}",
+        customer_email=current_user.email,
+        items=items,
+        subtotal=order.subtotal,
+        discount=order.discount_total,
+        total=payment.amount,
+        payment_method=payment.payment_type.value.replace("_", " ").title(),
+        transaction_id=payment.stripe_payment_intent_id or payment.id,
+    )
+
+    # Return PDF as streaming response
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=invoice_{payment.id}.pdf"
+        }
     )

@@ -4,8 +4,10 @@ from typing import Tuple
 
 from google.auth.transport import requests
 from google.oauth2 import id_token
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.user import TokenResponse
 from app.utils.security import create_tokens
@@ -18,6 +20,28 @@ class GoogleAuthService:
 
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
+
+    async def get_or_create_default_organization(self) -> str:
+        """Get or create the default organization for new users."""
+        # Check if default organization exists
+        result = await self.db_session.execute(
+            select(Organization).where(Organization.slug == "csf-default")
+        )
+        org = result.scalar_one_or_none()
+
+        if not org:
+            # Create default organization
+            org = Organization(
+                name="CSF School Academy",
+                slug="csf-default",
+                description="Default organization for CSF School Academy",
+                is_active=True,
+            )
+            self.db_session.add(org)
+            await self.db_session.commit()
+            await self.db_session.refresh(org)
+
+        return org.id
 
     async def authenticate(self, token: str) -> Tuple[User, TokenResponse]:
         """
@@ -56,12 +80,16 @@ class GoogleAuthService:
                 user.google_id = google_id
                 await self.db_session.commit()
             else:
+                # Get or create default organization
+                organization_id = await self.get_or_create_default_organization()
+
                 # Create new user
                 user = await User.create_user(
                     db_session=self.db_session,
                     email=email,
                     first_name=first_name,
                     last_name=last_name,
+                    organization_id=organization_id,
                     google_id=google_id,
                 )
                 user.is_verified = True

@@ -16,9 +16,13 @@ from app.models.child import (
     JerseySize,
 )
 from app.models.class_ import Class, ClassType, Weekday
+from app.models.credit import AccountCreditTransaction, CreditTransactionType
 from app.models.discount import DiscountCode, DiscountType, Scholarship
 from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.models.event import Event, EventType
+from app.models.organization import Organization
+from app.models.password_history import PasswordHistory
+from app.models.password_reset_token import PasswordResetToken
 from app.models.order import Order, OrderLineItem, OrderStatus
 from app.models.payment import (
     InstallmentFrequency,
@@ -39,6 +43,8 @@ __all__ = [
     # User
     "User",
     "Role",
+    "PasswordHistory",
+    "PasswordResetToken",
     # Program
     "Program",
     "Area",
@@ -53,6 +59,10 @@ __all__ = [
     "JerseySize",
     "Grade",
     "HowHeardAboutUs",
+    # Organization / credit
+    "Organization",
+    "AccountCreditTransaction",
+    "CreditTransactionType",
     # Announcement
     "Announcement",
     "AnnouncementAttachment",

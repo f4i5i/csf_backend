@@ -17,7 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.program import Program, School
@@ -33,7 +33,7 @@ class WaiverType(str, enum.Enum):
     CANCELLATION_POLICY = "cancellation_policy"
 
 
-class WaiverTemplate(Base, TimestampMixin):
+class WaiverTemplate(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Waiver template model with versioning."""
 
     __tablename__ = "waiver_templates"
@@ -51,10 +51,10 @@ class WaiverTemplate(Base, TimestampMixin):
 
     # Scope - null means global
     applies_to_program_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("programs.id"), nullable=True
+        String(36), ForeignKey("programs.id"), nullable=True, index=True
     )
     applies_to_school_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("schools.id"), nullable=True
+        String(36), ForeignKey("schools.id"), nullable=True, index=True
     )
 
     # Relationships
@@ -163,7 +163,7 @@ class WaiverTemplate(Base, TimestampMixin):
         return template
 
 
-class WaiverAcceptance(Base, TimestampMixin):
+class WaiverAcceptance(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Record of a user accepting a waiver."""
 
     __tablename__ = "waiver_acceptances"
@@ -175,7 +175,7 @@ class WaiverAcceptance(Base, TimestampMixin):
         String(36), ForeignKey("users.id"), nullable=False, index=True
     )
     waiver_template_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("waiver_templates.id"), nullable=False
+        String(36), ForeignKey("waiver_templates.id"), nullable=False, index=True
     )
 
     # Snapshot of version at acceptance time

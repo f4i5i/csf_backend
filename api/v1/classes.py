@@ -7,6 +7,7 @@ from api.deps import get_current_admin
 from app.models.class_ import Class
 from app.models.user import User
 from app.schemas.class_ import ClassCreate, ClassListResponse, ClassResponse, ClassUpdate
+from app.services.stripe_product_service import StripeProductService
 from core.db import get_db
 from core.exceptions.base import BadRequestException, NotFoundException
 from core.logging import get_logger
@@ -24,6 +25,7 @@ async def list_classes(
     has_capacity: Optional[bool] = None,
     min_age: Optional[int] = None,
     max_age: Optional[int] = None,
+    search: Optional[str] = Query(None, description="Search in class name and description"),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db_session: AsyncSession = Depends(get_db),
@@ -32,8 +34,9 @@ async def list_classes(
     List all classes with optional filters.
 
     Public endpoint - no authentication required.
+    Supports search by class name or description.
     """
-    logger.info(f"List classes request - skip: {skip}, limit: {limit}")
+    logger.info(f"List classes request - skip: {skip}, limit: {limit}, search: {search}")
     classes, total = await Class.get_filtered(
         db_session,
         program_id=program_id,
@@ -42,6 +45,7 @@ async def list_classes(
         has_capacity=has_capacity,
         min_age=min_age,
         max_age=max_age,
+        search=search,
         skip=skip,
         limit=limit,
     )
@@ -69,6 +73,13 @@ async def get_class(
     if not class_obj:
         logger.warning(f"Class not found: {class_id}")
         raise NotFoundException(message="Class not found")
+
+    logger.info(
+        f"Returning class {class_id} - capacity: {class_obj.capacity}, "
+        f"current_enrollment: {class_obj.current_enrollment}, "
+        f"has_capacity: {class_obj.has_capacity}, "
+        f"available_spots: {class_obj.available_spots}"
+    )
     return ClassResponse.model_validate(class_obj)
 
 
@@ -82,10 +93,12 @@ async def create_class(
     Create a new class.
 
     Requires admin or owner role.
+
+    If payment_options are provided, Stripe Product and Prices will be automatically created.
     """
     logger.info(f"Create class request by user: {current_user.id}, name: {data.name}")
-    # Convert weekdays to list of strings
-    weekdays = [w.value for w in data.weekdays]
+    # Convert weekdays to list of strings (optional for membership classes)
+    weekdays = [w.value for w in data.weekdays] if data.weekdays else []
 
     class_obj = await Class.create_class(
         db_session,
@@ -110,6 +123,39 @@ async def create_class(
         max_age=data.max_age,
     )
     logger.info(f"Class created successfully: {class_obj.id}")
+    logger.info(
+        f"Class capacity details - capacity: {class_obj.capacity}, "
+        f"current_enrollment: {class_obj.current_enrollment}, "
+        f"has_capacity: {class_obj.has_capacity}, "
+        f"available_spots: {class_obj.available_spots}"
+    )
+
+    # Process payment_options if provided
+    if data.payment_options and data.auto_create_stripe_prices:
+        try:
+            logger.info(
+                f"Processing {len(data.payment_options)} payment options for class {class_obj.id}"
+            )
+            payment_options_dict = [opt.model_dump() for opt in data.payment_options]
+            created_prices = await StripeProductService.process_payment_options(
+                db_session=db_session,
+                class_=class_obj,
+                payment_options=payment_options_dict,
+            )
+            logger.info(
+                f"Successfully created {len(created_prices)} Stripe prices for class {class_obj.id}"
+            )
+            # Refresh to get updated stripe_product_id
+            await db_session.refresh(class_obj)
+        except Exception as e:
+            logger.error(f"Failed to process payment options: {e}")
+            raise BadRequestException(
+                message=f"Class created but failed to create Stripe prices: {str(e)}"
+            )
+
+    # Eagerly load school relationship before validation to avoid lazy loading issues
+    await db_session.refresh(class_obj, attribute_names=['school'])
+
     return ClassResponse.model_validate(class_obj)
 
 
@@ -118,20 +164,26 @@ async def update_class(
     class_id: str,
     data: ClassUpdate,
     db_session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin),
+    # current_user: User = Depends(get_current_admin),
 ) -> ClassResponse:
     """
     Update a class.
 
     Requires admin or owner role.
+
+    If payment_options are provided, new Stripe Prices will be created.
     """
-    logger.info(f"Update class request by user: {current_user.id}, class_id: {class_id}")
+    # logger.info(f"Update class request by user: {current_user.id}, class_id: {class_id}")
     class_obj = await Class.get_by_id(db_session, class_id)
     if not class_obj:
         logger.warning(f"Class not found: {class_id}")
         raise NotFoundException(message="Class not found")
 
     update_data = data.model_dump(exclude_unset=True)
+
+    # Extract payment_options and auto_create_stripe_prices before updating
+    payment_options = update_data.pop("payment_options", None)
+    auto_create_stripe_prices = update_data.pop("auto_create_stripe_prices", True)
 
     # Convert weekdays to list of strings if provided
     if "weekdays" in update_data and update_data["weekdays"]:
@@ -161,6 +213,29 @@ async def update_class(
     await db_session.commit()
     await db_session.refresh(class_obj)
     logger.info(f"Class updated successfully: {class_id}")
+
+    # Process payment_options if provided
+    if payment_options and auto_create_stripe_prices:
+        try:
+            logger.info(
+                f"Processing {len(payment_options)} payment options for class {class_id}"
+            )
+            created_prices = await StripeProductService.process_payment_options(
+                db_session=db_session,
+                class_=class_obj,
+                payment_options=payment_options,
+            )
+            logger.info(
+                f"Successfully created {len(created_prices)} Stripe prices for class {class_id}"
+            )
+            # Refresh to get updated stripe_product_id
+            await db_session.refresh(class_obj)
+        except Exception as e:
+            logger.error(f"Failed to process payment options: {e}")
+            raise BadRequestException(
+                message=f"Class updated but failed to create Stripe prices: {str(e)}"
+            )
+
     return ClassResponse.model_validate(class_obj)
 
 

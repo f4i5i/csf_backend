@@ -9,7 +9,7 @@ from sqlalchemy import Boolean, Date, Enum, ForeignKey, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.class_ import Class
@@ -26,7 +26,7 @@ class EventType(str, enum.Enum):
     OTHER = "other"
 
 
-class Event(Base, TimestampMixin):
+class Event(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Event model for one-time events (tournaments, workshops, etc.)."""
 
     __tablename__ = "events"
@@ -45,7 +45,7 @@ class Event(Base, TimestampMixin):
     end_time: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_by: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
+        String(36), ForeignKey("users.id"), nullable=False, index=True
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

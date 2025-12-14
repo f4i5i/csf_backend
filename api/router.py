@@ -17,6 +17,9 @@ from api.v1.orders import router as orders_router
 from api.v1.payments import router as payments_router
 from api.v1.photos import router as photos_router
 from api.v1.programs import router as programs_router
+from api.v1.schools import router as schools_router
+from api.v1.stripe_products import router as stripe_products_router
+from api.v1.subscriptions import router as subscriptions_router
 from api.v1.users import router as users_router
 from api.v1.waivers import router as waivers_router
 from api.v1.webhooks import router as webhooks_router
@@ -27,6 +30,7 @@ router = APIRouter()
 router.include_router(auth_router, prefix="/v1")
 router.include_router(programs_router, prefix="/v1")
 router.include_router(areas_router, prefix="/v1")
+router.include_router(schools_router, prefix="/v1")
 router.include_router(classes_router, prefix="/v1")
 router.include_router(users_router, prefix="/v1")
 router.include_router(children_router, prefix="/v1")
@@ -35,6 +39,7 @@ router.include_router(payments_router, prefix="/v1")
 router.include_router(orders_router, prefix="/v1")
 router.include_router(enrollments_router, prefix="/v1")
 router.include_router(installments_router, prefix="/v1")
+router.include_router(subscriptions_router, prefix="/v1")
 router.include_router(discounts_router, prefix="/v1")
 router.include_router(webhooks_router, prefix="/v1")
 
@@ -48,3 +53,4 @@ router.include_router(checkin_router, prefix="/v1")
 
 # Admin features
 router.include_router(admin_router, prefix="/v1")
+router.include_router(stripe_products_router, prefix="/v1")

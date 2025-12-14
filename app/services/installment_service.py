@@ -75,9 +75,11 @@ class InstallmentService:
                 f"Cannot create installment plan for {order.status} order"
             )
 
-        # Validate installment count
-        if num_installments < 2 or num_installments > 12:
-            raise BadRequestException("Number of installments must be between 2 and 12")
+        # Validate installment count (maximum 2 allowed)
+        if num_installments < 1:
+            raise BadRequestException("At least 1 installment is required")
+        if num_installments > 2:
+            raise BadRequestException("Maximum 2 installments allowed")
 
         # Validate minimum amount per installment ($10)
         min_installment = Decimal("10.00")

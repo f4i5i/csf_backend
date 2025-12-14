@@ -7,7 +7,7 @@ from sqlalchemy import Boolean, Date, Enum, ForeignKey, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -54,7 +54,7 @@ class HowHeardAboutUs(str, enum.Enum):
     OTHER = "other"
 
 
-class Child(Base, TimestampMixin):
+class Child(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Child model representing a player/student."""
 
     __tablename__ = "children"
@@ -83,6 +83,9 @@ class Child(Base, TimestampMixin):
     )
     has_no_medical_conditions: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
+    )
+    has_medical_alert: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default='false'
     )
 
     # After school
@@ -183,7 +186,7 @@ class Child(Base, TimestampMixin):
         return await cls.get_by_id(db_session, child.id)
 
 
-class EmergencyContact(Base, TimestampMixin):
+class EmergencyContact(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Emergency contact for a child."""
 
     __tablename__ = "emergency_contacts"
@@ -192,7 +195,7 @@ class EmergencyContact(Base, TimestampMixin):
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     child_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("children.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey("children.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)

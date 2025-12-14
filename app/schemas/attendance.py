@@ -58,3 +58,30 @@ class ClassInstanceAttendanceResponse(BaseSchema):
 
     class_instance_id: str  # Keeping this name for backwards compatibility
     records: List[AttendanceResponse]
+
+
+class EnrollmentAttendanceStats(BaseSchema):
+    """Attendance stats for a single enrollment."""
+
+    enrollment_id: str
+    class_name: str
+    sessions_attended: int
+    sessions_missed: int
+    sessions_excused: int
+    total_sessions: int
+    attendance_rate: float  # 0-100
+    current_streak: int
+    status: str  # active, completed, etc.
+
+
+class AttendanceStatsResponse(BaseSchema):
+    """Aggregated attendance statistics for a child."""
+
+    child_id: str
+    total_sessions_attended: int
+    total_sessions_missed: int
+    total_sessions_excused: int
+    overall_attendance_rate: float  # 0-100
+    longest_streak: int
+    total_sessions: int
+    by_enrollment: List[EnrollmentAttendanceStats]

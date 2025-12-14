@@ -10,6 +10,7 @@ from app.models.checkin import CheckIn
 from app.models.class_ import Class
 from app.models.enrollment import Enrollment
 from app.models.user import Role, User
+from app.services.sms_service import get_sms_service
 from app.schemas.checkin import (
     BulkCheckInRequest,
     CheckInCreate,
@@ -17,6 +18,8 @@ from app.schemas.checkin import (
     CheckInResponse,
     CheckInStatusListResponse,
     CheckInStatusResponse,
+    TextClassRequest,
+    TextClassResponse,
 )
 from core.db import get_db
 from core.exceptions.base import ForbiddenException, NotFoundException
@@ -174,4 +177,76 @@ async def get_check_in_status(
 
     return CheckInStatusListResponse(
         class_id=class_id, check_in_date=check_in_date, statuses=statuses
+    )
+
+
+@router.post("/text-class", response_model=TextClassResponse)
+async def text_class(
+    data: TextClassRequest,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TextClassResponse:
+    """Send SMS to all parents in a class. Coach only."""
+    if current_user.role not in [Role.COACH, Role.ADMIN, Role.OWNER]:
+        raise ForbiddenException(message="Only coaches can send class messages")
+
+    # Verify class exists
+    class_ = await Class.get_by_id(db_session, data.class_id)
+    if not class_:
+        raise NotFoundException(message="Class not found")
+
+    # Get all active enrollments for this class
+    from sqlalchemy import select
+
+    stmt = select(Enrollment).where(
+        Enrollment.class_id == data.class_id,
+        Enrollment.status == "active",
+    )
+    result = await db_session.execute(stmt)
+    enrollments = result.scalars().all()
+
+    if not enrollments:
+        raise NotFoundException(message="No active enrollments found for this class")
+
+    # Extract parent phone numbers
+    phone_numbers = []
+    for enrollment in enrollments:
+        # Load the child and user relationships
+        await db_session.refresh(enrollment, ["child"])
+        await db_session.refresh(enrollment.child, ["user"])
+
+        parent = enrollment.child.user
+        if parent.phone_number:
+            phone_numbers.append(parent.phone_number)
+
+    if not phone_numbers:
+        return TextClassResponse(
+            sent_count=0,
+            failed_count=0,
+            total=0,
+            message="No parent phone numbers available"
+        )
+
+    # Send SMS via SMSService
+    sms_service = get_sms_service()
+
+    # Format message with class context
+    coach_name = f"{current_user.first_name} {current_user.last_name}"
+    result = sms_service.send_class_announcement(
+        class_name=class_.name,
+        coach_name=coach_name,
+        phone_numbers=phone_numbers,
+        message=data.message,
+    )
+
+    logger.info(
+        f"Class message sent by {current_user.id} to class {data.class_id}: "
+        f"{result['sent_count']}/{result['total']} successful"
+    )
+
+    return TextClassResponse(
+        sent_count=result["sent_count"],
+        failed_count=result["failed_count"],
+        total=result["total"],
+        message=f"Message sent to {result['sent_count']} out of {result['total']} parents"
     )

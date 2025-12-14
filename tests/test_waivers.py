@@ -428,3 +428,185 @@ class TestWaiverVersioning:
         )
         assert response2.status_code == 200
         assert response2.json()["version"] == 2
+
+
+class TestPendingWaivers:
+    """Tests for GET /api/v1/waivers/pending endpoint."""
+
+    async def test_get_pending_waivers_empty(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+    ):
+        """Test getting pending waivers when none exist."""
+        response = await client.get(
+            "/api/v1/waivers/pending", headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["items"] == []
+        assert data["pending_count"] == 0
+        assert data["total"] == 0
+
+    async def test_get_pending_waivers_never_accepted(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+    ):
+        """Test getting pending waivers that were never accepted."""
+        template = WaiverTemplate(
+            name="Never Accepted",
+            waiver_type=WaiverType.LIABILITY,
+            content="<p>Never accepted</p>",
+            version=1,
+            is_active=True,
+            is_required=True,
+        )
+        db_session.add(template)
+        await db_session.commit()
+
+        response = await client.get(
+            "/api/v1/waivers/pending", headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["pending_count"] == 1
+        assert len(data["items"]) == 1
+        assert data["items"][0]["needs_reconsent"] is True
+
+    async def test_get_pending_waivers_needs_reconsent(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_user: User,
+    ):
+        """Test getting waivers that need re-consent due to version update."""
+        template = WaiverTemplate(
+            name="Needs Reconsent",
+            waiver_type=WaiverType.MEDICAL_RELEASE,
+            content="<p>Updated content</p>",
+            version=2,  # Version 2
+            is_active=True,
+            is_required=True,
+        )
+        db_session.add(template)
+        await db_session.commit()
+        await db_session.refresh(template)
+
+        # Create acceptance for old version
+        acceptance = WaiverAcceptance(
+            user_id=test_user.id,
+            waiver_template_id=template.id,
+            waiver_version=1,  # Accepted old version
+            signer_name="Test User",
+            signer_ip="127.0.0.1",
+            signer_user_agent="Test Agent",
+        )
+        db_session.add(acceptance)
+        await db_session.commit()
+
+        response = await client.get(
+            "/api/v1/waivers/pending", headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["pending_count"] == 1
+        assert len(data["items"]) == 1
+        assert data["items"][0]["needs_reconsent"] is True
+
+    async def test_get_pending_waivers_accepted_current_version(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_user: User,
+    ):
+        """Test that accepted current version waivers don't show as pending."""
+        template = WaiverTemplate(
+            name="Already Accepted",
+            waiver_type=WaiverType.PHOTO_RELEASE,
+            content="<p>Photo release</p>",
+            version=1,
+            is_active=True,
+            is_required=True,
+        )
+        db_session.add(template)
+        await db_session.commit()
+        await db_session.refresh(template)
+
+        # Accept current version
+        acceptance = WaiverAcceptance(
+            user_id=test_user.id,
+            waiver_template_id=template.id,
+            waiver_version=1,  # Current version
+            signer_name="Test User",
+            signer_ip="127.0.0.1",
+            signer_user_agent="Test Agent",
+        )
+        db_session.add(acceptance)
+        await db_session.commit()
+
+        response = await client.get(
+            "/api/v1/waivers/pending", headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["pending_count"] == 0
+
+    async def test_get_pending_waivers_filter_by_program(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_program,
+    ):
+        """Test filtering pending waivers by program."""
+        template = WaiverTemplate(
+            name="Program Specific",
+            waiver_type=WaiverType.LIABILITY,
+            content="<p>Program waiver</p>",
+            version=1,
+            is_active=True,
+            is_required=True,
+            applies_to_program_id=test_program.id,
+        )
+        db_session.add(template)
+        await db_session.commit()
+
+        response = await client.get(
+            f"/api/v1/waivers/pending?program_id={test_program.id}",
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["pending_count"] >= 1
+
+    async def test_get_pending_waivers_filter_by_school(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session: AsyncSession,
+        test_school,
+    ):
+        """Test filtering pending waivers by school."""
+        template = WaiverTemplate(
+            name="School Specific",
+            waiver_type=WaiverType.MEDICAL_RELEASE,
+            content="<p>School waiver</p>",
+            version=1,
+            is_active=True,
+            is_required=True,
+            applies_to_school_id=test_school.id,
+        )
+        db_session.add(template)
+        await db_session.commit()
+
+        response = await client.get(
+            f"/api/v1/waivers/pending?school_id={test_school.id}",
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["pending_count"] >= 1

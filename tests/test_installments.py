@@ -13,10 +13,10 @@ class TestInstallmentPreview:
     async def test_preview_installment_schedule(
         self, client: AsyncClient, auth_headers: dict, test_order: dict
     ):
-        """Test previewing installment payment schedule."""
+        """Test previewing installment payment schedule (max 2 payments)."""
         response = await client.post(
             f"/api/v1/installments/preview?order_id={test_order['id']}"
-            "&num_installments=3&frequency=monthly",
+            "&num_installments=2&frequency=monthly",
             headers=auth_headers,
         )
         assert response.status_code == 200
@@ -24,9 +24,9 @@ class TestInstallmentPreview:
 
         # Verify preview structure
         assert data["total_amount"] == test_order["total"]
-        assert data["num_installments"] == 3
+        assert data["num_installments"] == 2
         assert data["frequency"] == "monthly"
-        assert len(data["schedule"]) == 3
+        assert len(data["schedule"]) == 2
 
         # Verify schedule details
         for i, item in enumerate(data["schedule"], 1):
@@ -46,7 +46,7 @@ class TestInstallmentPreview:
 
         response = await client.post(
             f"/api/v1/installments/preview?order_id={test_order['id']}"
-            f"&num_installments=4&frequency=weekly&start_date={start_date}",
+            f"&num_installments=2&frequency=weekly&start_date={start_date}",
             headers=auth_headers,
         )
         assert response.status_code == 200
@@ -67,10 +67,10 @@ class TestInstallmentPreview:
         )
         assert response.status_code == 422
 
-        # Too many
+        # Too many (max is 2)
         response = await client.post(
             f"/api/v1/installments/preview?order_id={test_order['id']}"
-            "&num_installments=13&frequency=monthly",
+            "&num_installments=3&frequency=monthly",
             headers=auth_headers,
         )
         assert response.status_code == 422
@@ -83,7 +83,7 @@ class TestInstallmentPreview:
 
         response = await client.post(
             f"/api/v1/installments/preview?order_id={test_order['id']}"
-            f"&num_installments=3&frequency=monthly&start_date={past_date}",
+            f"&num_installments=2&frequency=monthly&start_date={past_date}",
             headers=auth_headers,
         )
         assert response.status_code == 400
@@ -101,12 +101,12 @@ class TestInstallmentPlanCRUD:
         test_payment_method: dict,
         mock_stripe_service,
     ):
-        """Test creating an installment plan."""
+        """Test creating an installment plan (max 2 payments)."""
         response = await client.post(
             "/api/v1/installments/",
             json={
                 "order_id": test_order["id"],
-                "num_installments": 3,
+                "num_installments": 2,  # Max 2 installments allowed
                 "frequency": "monthly",
                 "payment_method_id": test_payment_method["id"],
             },
@@ -118,7 +118,7 @@ class TestInstallmentPlanCRUD:
         # Verify plan details
         assert data["order_id"] == test_order["id"]
         assert data["user_id"] == auth_headers["user_id"]
-        assert data["num_installments"] == 3
+        assert data["num_installments"] == 2
         assert data["frequency"] == "monthly"
         assert data["status"] == "active"
         assert data["total_amount"] == test_order["total"]
@@ -153,7 +153,7 @@ class TestInstallmentPlanCRUD:
             start_time=time(16, 0),
             end_time=time(17, 0),
             capacity=20,
-            price=Decimal("25.00"),
+            price=Decimal("15.00"),  # $15 / 2 = $7.50 per installment (below $10 min)
             min_age=6,
             max_age=12,
             is_active=True,
@@ -172,12 +172,12 @@ class TestInstallmentPlanCRUD:
         )
         low_order_data = low_order.json()
 
-        # Try to create 3 installments (would be ~$8.33 each, below $10 minimum)
+        # Try to create 2 installments (would be $7.50 each, below $10 minimum)
         response = await client.post(
             "/api/v1/installments/",
             json={
                 "order_id": low_order_data["id"],
-                "num_installments": 3,
+                "num_installments": 2,
                 "frequency": "monthly",
                 "payment_method_id": test_payment_method["id"],
             },
@@ -206,7 +206,7 @@ class TestInstallmentPlanCRUD:
             "/api/v1/installments/",
             json={
                 "order_id": test_order["id"],
-                "num_installments": 3,
+                "num_installments": 2,
                 "frequency": "monthly",
                 "payment_method_id": test_payment_method["id"],
             },
@@ -486,3 +486,330 @@ class TestInstallmentAdminEndpoints:
             headers=auth_headers,
         )
         assert response.status_code == 403
+
+
+class TestInstallmentSummary:
+    """Tests for GET /api/v1/installments/summary endpoint."""
+
+    async def test_get_summary_no_plans(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+    ):
+        """Test getting summary when user has no installment plans."""
+        response = await client.get(
+            "/api/v1/installments/summary",
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["active_plans_count"] == 0
+        assert data["completed_plans_count"] == 0
+        assert data["cancelled_plans_count"] == 0
+        assert Decimal(data["total_amount_owed"]) == Decimal("0.00")
+        assert data["next_payment_amount"] is None
+        assert data["next_payment_due"] is None
+        assert data["total_paid_count"] == 0
+
+    async def test_get_summary_with_active_plan(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        test_installment_plan: dict,
+    ):
+        """Test getting summary with an active installment plan."""
+        response = await client.get(
+            "/api/v1/installments/summary",
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["active_plans_count"] == 1
+        assert data["completed_plans_count"] == 0
+        assert Decimal(data["total_amount_owed"]) > 0
+
+    async def test_get_summary_with_multiple_plans(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session,
+        test_user,
+        test_order: dict,
+    ):
+        """Test summary with multiple installment plans."""
+        from app.models.payment import (
+            InstallmentPlan,
+            InstallmentPlanStatus,
+            InstallmentFrequency,
+            InstallmentPayment,
+            InstallmentPaymentStatus,
+        )
+
+        # Create multiple plans
+        plan1 = await InstallmentPlan.create_plan(
+            db_session,
+            order_id=test_order["id"],
+            user_id=test_user.id,
+            total_amount=Decimal("300.00"),
+            num_installments=2,  # Max 2 installments
+            installment_amount=Decimal("100.00"),
+            frequency=InstallmentFrequency.MONTHLY,
+            start_date=date.today(),
+            stripe_subscription_id="sub_1",
+            status=InstallmentPlanStatus.ACTIVE,
+        )
+
+        plan2 = await InstallmentPlan.create_plan(
+            db_session,
+            order_id=test_order["id"],
+            user_id=test_user.id,
+            total_amount=Decimal("200.00"),
+            num_installments=2,
+            installment_amount=Decimal("100.00"),
+            frequency=InstallmentFrequency.MONTHLY,
+            start_date=date.today(),
+            stripe_subscription_id="sub_2",
+            status=InstallmentPlanStatus.COMPLETED,
+        )
+
+        await db_session.commit()
+
+        response = await client.get(
+            "/api/v1/installments/summary",
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["active_plans_count"] == 1
+        assert data["completed_plans_count"] == 1
+
+    async def test_get_summary_next_payment_calculation(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session,
+        test_user,
+        test_order: dict,
+    ):
+        """Test that next payment is correctly calculated."""
+        from app.models.payment import (
+            InstallmentPlan,
+            InstallmentPlanStatus,
+            InstallmentFrequency,
+            InstallmentPayment,
+            InstallmentPaymentStatus,
+        )
+
+        plan = await InstallmentPlan.create_plan(
+            db_session,
+            order_id=test_order["id"],
+            user_id=test_user.id,
+            total_amount=Decimal("300.00"),
+            num_installments=2,  # Max 2 installments
+            installment_amount=Decimal("100.00"),
+            frequency=InstallmentFrequency.MONTHLY,
+            start_date=date.today(),
+            stripe_subscription_id="sub_test",
+            status=InstallmentPlanStatus.ACTIVE,
+        )
+        await db_session.commit()
+        await db_session.refresh(plan)
+
+        # Create installment payments
+        payment1 = InstallmentPayment(
+            installment_plan_id=plan.id,
+            installment_number=1,
+            due_date=date.today(),
+            amount=Decimal("100.00"),
+            status=InstallmentPaymentStatus.PENDING,
+        )
+        payment2 = InstallmentPayment(
+            installment_plan_id=plan.id,
+            installment_number=2,
+            due_date=date.today() + timedelta(days=30),
+            amount=Decimal("100.00"),
+            status=InstallmentPaymentStatus.PENDING,
+        )
+        db_session.add_all([payment1, payment2])
+        await db_session.commit()
+
+        response = await client.get(
+            "/api/v1/installments/summary",
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert Decimal(data["next_payment_amount"]) == Decimal("100.00")
+        assert data["next_payment_due"] == date.today().isoformat()
+
+    async def test_get_summary_paid_installments_count(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session,
+        test_user,
+        test_order: dict,
+    ):
+        """Test that paid installments are counted correctly."""
+        from app.models.payment import (
+            InstallmentPlan,
+            InstallmentPlanStatus,
+            InstallmentFrequency,
+            InstallmentPayment,
+            InstallmentPaymentStatus,
+        )
+
+        plan = await InstallmentPlan.create_plan(
+            db_session,
+            order_id=test_order["id"],
+            user_id=test_user.id,
+            total_amount=Decimal("300.00"),
+            num_installments=2,  # Max 2 installments
+            installment_amount=Decimal("100.00"),
+            frequency=InstallmentFrequency.MONTHLY,
+            start_date=date.today(),
+            stripe_subscription_id="sub_test",
+            status=InstallmentPlanStatus.ACTIVE,
+        )
+        await db_session.commit()
+        await db_session.refresh(plan)
+
+        # Create paid and pending payments
+        payment1 = InstallmentPayment(
+            installment_plan_id=plan.id,
+            installment_number=1,
+            due_date=date.today(),
+            amount=Decimal("100.00"),
+            status=InstallmentPaymentStatus.PAID,
+        )
+        payment2 = InstallmentPayment(
+            installment_plan_id=plan.id,
+            installment_number=2,
+            due_date=date.today() + timedelta(days=30),
+            amount=Decimal("100.00"),
+            status=InstallmentPaymentStatus.PENDING,
+        )
+        db_session.add_all([payment1, payment2])
+        await db_session.commit()
+
+        response = await client.get(
+            "/api/v1/installments/summary",
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_paid_count"] == 1
+        assert Decimal(data["total_amount_owed"]) == Decimal("100.00")
+
+    async def test_get_summary_cancelled_plan(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session,
+        test_user,
+        test_order: dict,
+    ):
+        """Test summary with cancelled plan."""
+        from app.models.payment import (
+            InstallmentPlan,
+            InstallmentPlanStatus,
+            InstallmentFrequency,
+        )
+
+        plan = await InstallmentPlan.create_plan(
+            db_session,
+            order_id=test_order["id"],
+            user_id=test_user.id,
+            total_amount=Decimal("300.00"),
+            num_installments=2,  # Max 2 installments
+            installment_amount=Decimal("100.00"),
+            frequency=InstallmentFrequency.MONTHLY,
+            start_date=date.today(),
+            stripe_subscription_id="sub_test",
+            status=InstallmentPlanStatus.CANCELLED,
+        )
+        await db_session.commit()
+
+        response = await client.get(
+            "/api/v1/installments/summary",
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["cancelled_plans_count"] == 1
+        assert data["active_plans_count"] == 0
+
+    async def test_get_summary_total_amount_owed(
+        self,
+        client: AsyncClient,
+        auth_headers: dict,
+        db_session,
+        test_user,
+        test_order: dict,
+    ):
+        """Test that total amount owed sums all pending installments."""
+        from app.models.payment import (
+            InstallmentPlan,
+            InstallmentPlanStatus,
+            InstallmentFrequency,
+            InstallmentPayment,
+            InstallmentPaymentStatus,
+        )
+
+        plan = await InstallmentPlan.create_plan(
+            db_session,
+            order_id=test_order["id"],
+            user_id=test_user.id,
+            total_amount=Decimal("400.00"),
+            num_installments=2,  # Max 2 installments
+            installment_amount=Decimal("100.00"),
+            frequency=InstallmentFrequency.MONTHLY,
+            start_date=date.today(),
+            stripe_subscription_id="sub_test",
+            status=InstallmentPlanStatus.ACTIVE,
+        )
+        await db_session.commit()
+        await db_session.refresh(plan)
+
+        # Create mix of paid and pending
+        payments = [
+            InstallmentPayment(
+                installment_plan_id=plan.id,
+                installment_number=1,
+                due_date=date.today(),
+                amount=Decimal("100.00"),
+                status=InstallmentPaymentStatus.PAID,
+            ),
+            InstallmentPayment(
+                installment_plan_id=plan.id,
+                installment_number=2,
+                due_date=date.today() + timedelta(days=30),
+                amount=Decimal("100.00"),
+                status=InstallmentPaymentStatus.PENDING,
+            ),
+            InstallmentPayment(
+                installment_plan_id=plan.id,
+                installment_number=3,
+                due_date=date.today() + timedelta(days=60),
+                amount=Decimal("100.00"),
+                status=InstallmentPaymentStatus.PENDING,
+            ),
+            InstallmentPayment(
+                installment_plan_id=plan.id,
+                installment_number=4,
+                due_date=date.today() + timedelta(days=90),
+                amount=Decimal("100.00"),
+                status=InstallmentPaymentStatus.PENDING,
+            ),
+        ]
+        for p in payments:
+            db_session.add(p)
+        await db_session.commit()
+
+        response = await client.get(
+            "/api/v1/installments/summary",
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert Decimal(data["total_amount_owed"]) == Decimal("300.00")  # 3 pending * $100

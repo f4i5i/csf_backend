@@ -23,6 +23,11 @@ class EnrollmentResponse(BaseSchema):
     final_price: Decimal
     created_at: datetime
     updated_at: datetime
+    # Waitlist fields
+    waitlist_priority: Optional[str] = None
+    auto_promote: bool = False
+    claim_window_expires_at: Optional[datetime] = None
+    promoted_at: Optional[datetime] = None
     # Related data
     child_name: Optional[str] = None
     class_name: Optional[str] = None
@@ -57,3 +62,51 @@ class EnrollmentTransfer(BaseSchema):
     """Transfer enrollment to different class."""
 
     new_class_id: str
+
+
+class JoinWaitlistRequest(BaseSchema):
+    """Request to join waitlist for a class."""
+
+    child_id: str
+    class_id: str
+    priority: str  # "priority" or "regular"
+    payment_method_id: Optional[str] = None  # Required for priority waitlist
+
+
+class WaitlistEntryResponse(BaseSchema):
+    """Waitlist entry with position information."""
+
+    enrollment_id: str
+    child_id: str
+    child_name: str
+    class_id: str
+    class_name: str
+    waitlist_priority: str
+    position: int  # Position in waitlist (1-indexed)
+    auto_promote: bool
+    claim_window_expires_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class WaitlistListResponse(BaseSchema):
+    """List of waitlist entries for a class."""
+
+    class_id: str
+    class_name: str
+    total_waitlisted: int
+    priority_count: int
+    regular_count: int
+    entries: list[WaitlistEntryResponse]
+
+
+class ClaimWaitlistRequest(BaseSchema):
+    """Request to claim a regular waitlist spot."""
+
+    payment_method_id: str  # Payment method for claiming the spot
+
+
+class PromoteWaitlistRequest(BaseSchema):
+    """Admin request to manually promote from waitlist."""
+
+    enrollment_id: str
+    skip_payment: bool = False  # Admin can skip payment requirement

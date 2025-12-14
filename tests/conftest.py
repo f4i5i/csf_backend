@@ -326,8 +326,8 @@ async def test_installment_plan(
         order_id=test_order["id"],
         user_id=test_user.id,
         total_amount=Decimal(test_order["total"]),
-        num_installments=3,
-        installment_amount=Decimal(test_order["total"]) / 3,
+        num_installments=2,  # Max 2 installments
+        installment_amount=Decimal(test_order["total"]) / 2,
         frequency=InstallmentFrequency.MONTHLY,
         start_date=date.today(),
         stripe_subscription_id="sub_test_1234567890",
@@ -335,7 +335,7 @@ async def test_installment_plan(
     )
 
     # Create installment payment records
-    for i in range(3):
+    for i in range(2):  # Max 2 installments
         from datetime import timedelta
         installment = InstallmentPayment(
             installment_plan_id=plan.id,

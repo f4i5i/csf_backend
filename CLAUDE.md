@@ -456,7 +456,7 @@ CommunicationLogs  - Email/SMS history with status tracking
 |------|-------------|----------|
 | One-time | Single payment | Short-term classes |
 | Subscription | Recurring monthly | Memberships |
-| Installment | Split 2-4+ payments | Flexible payment option |
+| Installment | Split into 2 payments | Flexible payment option |
 
 ### Sibling Discounts (Auto-applied)
 ```python
@@ -472,21 +472,23 @@ SIBLING_DISCOUNTS = {
 - **Memberships**: Prorated based on billing cycle position
 
 ### 15-Day Cancellation Policy
+The 15-day period starts from the cancellation request date (not enrollment date or class start date).
+
 ```python
 def calculate_cancellation(enrollment: Enrollment, cancel_date: date) -> CancellationResult:
     days_enrolled = (cancel_date - enrollment.start_date).days
 
     if days_enrolled < 15:
-        # Full refund minus processing fee
+        # Full refund with no processing fee
         return CancellationResult(
-            refund_amount=enrollment.amount_paid - PROCESSING_FEE,
+            refund_amount=enrollment.amount_paid,
             effective_date=cancel_date
         )
     else:
-        # Effective at next billing cycle
+        # No refund after 15 days
         return CancellationResult(
-            refund_amount=calculate_prorated_refund(enrollment),
-            effective_date=next_billing_date(enrollment)
+            refund_amount=Decimal("0.00"),
+            effective_date=cancel_date
         )
 ```
 
@@ -732,8 +734,8 @@ async def auth_client(test_user):
 |-----------|-------|--------|
 | 1 | Foundation, Auth & Class Browsing | ✅ Complete |
 | 2 | Child Registration & Customizable Waivers | ✅ Complete |
-| 3 | Payment Integration (Stripe) + Installments | Current |
-| 4 | Email Automation & Admin Portal Core | Pending |
+| 3 | Payment Integration (Stripe) + Installments | ✅ Complete |
+| 4 | Email Automation & Admin Portal Core | Current |
 | 5 | Client Management & Advanced Admin | Pending |
 | 6 | Testing, Security, Polish & Documentation | Pending |
 
@@ -772,18 +774,36 @@ async def auth_client(test_user):
 - Waiver acceptance with legal compliance fields
 - 55 tests passing
 
-### Current: Milestone 3 - Payment Integration (Stripe) + Installments
+### Completed: Milestone 3 - Payment Integration (Stripe) + Installments
 
 **Backend Tasks:**
-- [ ] Stripe SDK integration
-- [ ] Payment models (Payment, InstallmentPlan)
-- [ ] Order/OrderLineItem models
-- [ ] Enrollment model and flow
-- [ ] One-time payment processing
-- [ ] Subscription billing
-- [ ] Installment plan setup
-- [ ] Stripe webhook handlers
-- [ ] Coupon/discount code system
+- [x] Stripe SDK integration
+- [x] Payment models (Payment, InstallmentPlan)
+- [x] Order/OrderLineItem models
+- [x] Enrollment model and flow
+- [x] One-time payment processing
+- [x] Subscription billing
+- [x] Installment plan setup
+- [x] Stripe webhook handlers
+- [x] Coupon/discount code system
+
+**Success Criteria:** ✅ All Met
+- Users can enroll children in classes
+- One-time payment processing works end-to-end
+- Installment plans can be created and managed
+- Subscription billing infrastructure in place
+- Discount codes can be applied
+- All webhook events handled properly
+- 97 tests passing (100% pass rate)
+
+### Current: Milestone 4 - Email Automation & Admin Portal Core
+
+**Backend Tasks:**
+- [ ] Email templates and automation
+- [ ] Admin dashboard with metrics
+- [ ] Client management interface
+- [ ] Revenue reporting
+- [ ] Bulk email functionality
 
 ---
 
@@ -857,4 +877,4 @@ async def get_class(class_id: UUID, db: AsyncSession = Depends(get_db)):
 
 ---
 
-**Last Updated**: 2025-11-24 | **Milestone**: 3 - Payment Integration (Stripe)
+**Last Updated**: 2025-11-26 | **Milestone**: 4 - Email Automation & Admin Portal Core

@@ -60,6 +60,7 @@ async def create_announcement(
         description=data.description,
         type=data.type,
         author_id=current_user.id,
+        organization_id=current_user.organization_id,
     )
 
     return AnnouncementResponse.model_validate(announcement)
@@ -215,6 +216,7 @@ async def upload_attachment(
         file_size=file.size or 0,
         file_type=attachment_type,
         mime_type=file.content_type or "application/octet-stream",
+        organization_id=current_user.organization_id,
     )
     db_session.add(attachment)
     await db_session.commit()

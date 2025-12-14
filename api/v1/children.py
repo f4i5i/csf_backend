@@ -1,13 +1,18 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_admin, get_current_user
 from app.models.child import Child, EmergencyContact
+from app.models.class_ import Class
+from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.models.program import School
 from app.models.user import User
 from app.schemas.child import (
     ChildCreate,
+    ChildEnrollmentInfo,
     ChildListResponse,
     ChildResponse,
     ChildUpdate,
@@ -25,8 +30,51 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/children", tags=["Children"])
 
 
-def child_to_response(child: Child) -> ChildResponse:
-    """Convert Child model to response with decrypted PII."""
+async def child_to_response(child: Child, db_session: AsyncSession) -> ChildResponse:
+    """Convert Child model to response with decrypted PII and enrollment info."""
+    # Fetch active enrollments for this child
+    enrollments_query = select(Enrollment).where(
+        Enrollment.child_id == child.id,
+        Enrollment.status.in_([EnrollmentStatus.ACTIVE, EnrollmentStatus.PENDING])
+    )
+    result = await db_session.execute(enrollments_query)
+    enrollments = result.scalars().all()
+
+    # Build enrollment info with class and school names
+    enrollment_info = []
+    for enrollment in enrollments:
+        # Get class details
+        class_result = await db_session.execute(
+            select(Class).where(Class.id == enrollment.class_id)
+        )
+        class_ = class_result.scalar_one_or_none()
+
+        # Get school details if class has a school
+        school_name = None
+        school_id = None
+        if class_ and class_.school_id:
+            school_id = class_.school_id
+            school_result = await db_session.execute(
+                select(School).where(School.id == class_.school_id)
+            )
+            school = school_result.scalar_one_or_none()
+            if school:
+                school_name = school.name
+
+        if class_:
+            enrollment_info.append(
+                ChildEnrollmentInfo(
+                    enrollment_id=enrollment.id,
+                    class_id=enrollment.class_id,
+                    class_name=class_.name,
+                    school_id=school_id,
+                    school_name=school_name,
+                    weekdays=class_.weekdays,
+                    status=enrollment.status.value,
+                    enrolled_at=enrollment.enrolled_at,
+                )
+            )
+
     return ChildResponse(
         id=child.id,
         user_id=child.user_id,
@@ -39,6 +87,7 @@ def child_to_response(child: Child) -> ChildResponse:
         grade=child.grade,
         medical_conditions=decrypt_pii(child.medical_conditions_encrypted),
         has_no_medical_conditions=child.has_no_medical_conditions,
+        has_medical_alert=child.has_medical_alert,
         after_school_attendance=child.after_school_attendance,
         after_school_program=child.after_school_program,
         health_insurance_number=decrypt_pii(child.health_insurance_number_encrypted),
@@ -51,6 +100,7 @@ def child_to_response(child: Child) -> ChildResponse:
             EmergencyContactResponse.model_validate(ec)
             for ec in child.emergency_contacts
         ],
+        enrollments=enrollment_info,
     )
 
 
@@ -67,6 +117,33 @@ async def verify_child_access(
         raise ForbiddenException(message="You don't have access to this child")
 
 
+async def verify_emergency_contact_access(child: Child, user: User) -> None:
+    """
+    Verify user can manage emergency contacts for this child.
+
+    Emergency contacts can only be managed by:
+    - Admin/Owner (any child)
+    - Parent (their own children only)
+
+    Staff/Coach role CANNOT manage emergency contacts.
+    """
+    # Block coach/staff role explicitly
+    if user.role.value == "coach":
+        raise ForbiddenException(
+            message="Staff members cannot manage emergency contacts"
+        )
+
+    # Admin/Owner can manage any child's emergency contacts
+    if user.role.value in ["owner", "admin"]:
+        return
+
+    # Parent can only manage their own children's emergency contacts
+    if child.user_id != user.id:
+        raise ForbiddenException(
+            message="You can only manage emergency contacts for your own children"
+        )
+
+
 @router.get("/my", response_model=ChildListResponse)
 async def list_my_children(
     current_user: User = Depends(get_current_user),
@@ -80,8 +157,15 @@ async def list_my_children(
     logger.info(f"List children request by user: {current_user.id}")
     children = await Child.get_by_user_id(db_session, current_user.id)
     logger.info(f"Found {len(children)} children for user: {current_user.id}")
+
+    # Build response with enrollment info
+    items = []
+    for child in children:
+        item = await child_to_response(child, db_session)
+        items.append(item)
+
     return ChildListResponse(
-        items=[child_to_response(c) for c in children],
+        items=items,
         total=len(children),
     )
 
@@ -101,6 +185,21 @@ async def create_child(
         f"Create child request by user: {current_user.id}, name: {data.first_name}"
     )
 
+    # Validate emergency contacts (min 1, max 3)
+    if not data.emergency_contacts or len(data.emergency_contacts) < 1:
+        from core.exceptions.base import BadRequestException
+        raise BadRequestException(message="At least 1 emergency contact is required")
+
+    if len(data.emergency_contacts) > 3:
+        from core.exceptions.base import BadRequestException
+        raise BadRequestException(message="Maximum 3 emergency contacts allowed per child")
+
+    # Determine if child has medical alert (for check-in dashboard)
+    has_medical_alert = bool(
+        data.medical_conditions and
+        not data.has_no_medical_conditions
+    )
+
     # Create child with encrypted PII
     child = await Child.create_child(
         db_session,
@@ -112,11 +211,13 @@ async def create_child(
         grade=data.grade,
         medical_conditions_encrypted=encrypt_pii(data.medical_conditions),
         has_no_medical_conditions=data.has_no_medical_conditions,
+        has_medical_alert=has_medical_alert,
         after_school_attendance=data.after_school_attendance,
         after_school_program=data.after_school_program,
         health_insurance_number_encrypted=encrypt_pii(data.health_insurance_number),
         how_heard_about_us=data.how_heard_about_us,
         how_heard_other_text=data.how_heard_other_text,
+        organization_id=current_user.organization_id,
     )
 
     # Create emergency contacts if provided
@@ -132,6 +233,7 @@ async def create_child(
                 phone=ec_data.phone,
                 email=ec_data.email,
                 is_primary=ec_data.is_primary,
+                organization_id=current_user.organization_id,
             )
             db_session.add(contact)
         await db_session.commit()
@@ -140,7 +242,7 @@ async def create_child(
         child = await Child.get_by_id(db_session, child_id)
 
     logger.info(f"Child created successfully: {child.id}")
-    return child_to_response(child)
+    return await child_to_response(child, db_session)
 
 
 @router.get("/{child_id}", response_model=ChildResponse)
@@ -161,7 +263,7 @@ async def get_child(
         raise NotFoundException(message="Child not found")
 
     await verify_child_access(child, current_user)
-    return child_to_response(child)
+    return await child_to_response(child, db_session)
 
 
 @router.put("/{child_id}", response_model=ChildResponse)
@@ -191,6 +293,11 @@ async def update_child(
         update_data["medical_conditions_encrypted"] = encrypt_pii(
             update_data.pop("medical_conditions")
         )
+        # Update has_medical_alert based on medical conditions
+        has_no_medical = update_data.get("has_no_medical_conditions", child.has_no_medical_conditions)
+        update_data["has_medical_alert"] = bool(
+            update_data.get("medical_conditions_encrypted") and not has_no_medical
+        )
     if "health_insurance_number" in update_data:
         update_data["health_insurance_number_encrypted"] = encrypt_pii(
             update_data.pop("health_insurance_number")
@@ -202,19 +309,19 @@ async def update_child(
     await db_session.commit()
     await db_session.refresh(child)
     logger.info(f"Child updated successfully: {child_id}")
-    return child_to_response(child)
+    return await child_to_response(child, db_session)
 
 
 @router.delete("/{child_id}")
 async def delete_child(
     child_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     Soft delete a child.
 
-    Parents can only delete their own children. Admins can delete any child.
+    Only admins and owners can delete children (not parents).
     """
     logger.info(f"Delete child request by user: {current_user.id}, child: {child_id}")
     child = await Child.get_by_id(db_session, child_id)
@@ -258,13 +365,19 @@ async def create_emergency_contact(
     current_user: User = Depends(get_current_user),
     db_session: AsyncSession = Depends(get_db),
 ) -> EmergencyContactResponse:
-    """Add an emergency contact to a child."""
+    """Add an emergency contact to a child (maximum 3 allowed)."""
     logger.info(f"Create emergency contact for child: {child_id}")
     child = await Child.get_by_id(db_session, child_id)
     if not child:
         raise NotFoundException(message="Child not found")
 
-    await verify_child_access(child, current_user)
+    await verify_emergency_contact_access(child, current_user)
+
+    # Check if child already has 3 emergency contacts
+    existing_contacts = await EmergencyContact.get_by_child_id(db_session, child_id)
+    if len(existing_contacts) >= 3:
+        from core.exceptions.base import BadRequestException
+        raise BadRequestException(message="Maximum 3 emergency contacts allowed per child")
 
     contact = await EmergencyContact.create_contact(
         db_session,
@@ -274,6 +387,7 @@ async def create_emergency_contact(
         phone=data.phone,
         email=data.email,
         is_primary=data.is_primary,
+        organization_id=current_user.organization_id,
     )
     logger.info(f"Emergency contact created: {contact.id}")
     return EmergencyContactResponse.model_validate(contact)
@@ -294,7 +408,7 @@ async def update_emergency_contact(
 
     # Get parent child to verify access
     child = await Child.get_by_id(db_session, contact.child_id)
-    await verify_child_access(child, current_user)
+    await verify_emergency_contact_access(child, current_user)
 
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
@@ -320,7 +434,7 @@ async def delete_emergency_contact(
 
     # Get parent child to verify access
     child = await Child.get_by_id(db_session, contact.child_id)
-    await verify_child_access(child, current_user)
+    await verify_emergency_contact_access(child, current_user)
 
     await db_session.delete(contact)
     await db_session.commit()

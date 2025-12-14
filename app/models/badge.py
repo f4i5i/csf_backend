@@ -20,7 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.enrollment import Enrollment
@@ -64,7 +64,7 @@ class BadgeCriteria(str, enum.Enum):
     LEADERSHIP = "leadership"
 
 
-class Badge(Base, TimestampMixin):
+class Badge(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Badge definition."""
 
     __tablename__ = "badges"
@@ -113,7 +113,7 @@ class Badge(Base, TimestampMixin):
         return result.scalar_one_or_none()
 
 
-class StudentBadge(Base, TimestampMixin):
+class StudentBadge(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Student's earned badge."""
 
     __tablename__ = "student_badges"
@@ -133,7 +133,7 @@ class StudentBadge(Base, TimestampMixin):
         default=lambda: datetime.now(timezone.utc),
     )
     awarded_by: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=True
+        String(36), ForeignKey("users.id"), nullable=True, index=True
     )
     progress: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     progress_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

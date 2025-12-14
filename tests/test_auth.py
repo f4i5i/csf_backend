@@ -100,6 +100,22 @@ class TestAuthRegister:
         data = response.json()
         assert data["user"]["email"] == "caseuser@example.com"
 
+    async def test_register_disposable_email(self, client: AsyncClient):
+        """Test registration with disposable email is blocked."""
+        response = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "test@tempmail.com",  # Disposable domain
+                "password": "NewPass123",
+                "confirm_password": "NewPass123",
+                "first_name": "Test",
+                "last_name": "User",
+            },
+        )
+        assert response.status_code == 422
+        data = response.json()
+        assert "disposable" in data["detail"][0]["msg"].lower()
+
 
 class TestAuthLogin:
     """Tests for user login endpoint."""
@@ -187,3 +203,66 @@ class TestAuthRefresh:
             json={"refresh_token": "invalid-token"},
         )
         assert response.status_code == 401
+
+
+class TestAuthLogout:
+    """Tests for logout endpoint."""
+
+    async def test_logout_without_token(self, client: AsyncClient):
+        """Test logout without providing refresh token."""
+        response = await client.post("/api/v1/auth/logout")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message"] == "Logged out successfully"
+
+    async def test_logout_with_valid_token(self, client: AsyncClient, test_user):
+        """Test logout with valid refresh token."""
+        # First login to get tokens
+        login_response = await client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": "test@example.com",
+                "password": "TestPass123",
+            },
+        )
+        tokens = login_response.json()
+
+        # Then logout with refresh token
+        response = await client.post(
+            "/api/v1/auth/logout",
+            json={"refresh_token": tokens["refresh_token"]},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message"] == "Logged out successfully"
+
+    async def test_logout_with_invalid_token(self, client: AsyncClient):
+        """Test logout with invalid refresh token."""
+        response = await client.post(
+            "/api/v1/auth/logout",
+            json={"refresh_token": "invalid-token"},
+        )
+        assert response.status_code == 401
+
+    async def test_logout_with_access_token_should_fail(
+        self, client: AsyncClient, test_user
+    ):
+        """Test that logout rejects access token (should use refresh token)."""
+        # First login to get tokens
+        login_response = await client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": "test@example.com",
+                "password": "TestPass123",
+            },
+        )
+        tokens = login_response.json()
+
+        # Try to logout with access token (wrong token type)
+        response = await client.post(
+            "/api/v1/auth/logout",
+            json={"refresh_token": tokens["access_token"]},
+        )
+        assert response.status_code == 401
+        data = response.json()
+        assert "Invalid token type" in data["message"]

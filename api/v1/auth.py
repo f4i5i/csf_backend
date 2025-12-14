@@ -3,8 +3,10 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.user import (
+    ForgotPasswordRequest,
     GoogleAuthRequest,
     RefreshTokenRequest,
+    ResetPasswordRequest,
     TokenResponse,
     UserCreate,
     UserLogin,
@@ -31,6 +33,15 @@ async def register(
     Returns user data and authentication tokens.
     """
     logger.info(f"Register request for email: {data.email}")
+
+    # Block disposable email addresses
+    from app.utils.email_validator import is_disposable_email
+    if is_disposable_email(data.email):
+        from core.exceptions.base import BadRequestException
+        raise BadRequestException(
+            message="Disposable email addresses are not allowed. Please use a valid email address."
+        )
+
     service = AuthService(db_session)
     user, tokens = await service.register(data)
     logger.info(f"User registered successfully: {user.id}")
@@ -113,4 +124,79 @@ async def google_auth(
     return {
         "user": UserResponse.model_validate(user),
         "tokens": tokens,
+    }
+
+
+@router.post("/logout")
+async def logout(
+    data: RefreshTokenRequest | None = None,
+    db_session: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Logout user.
+
+    Optionally accepts refresh token for validation.
+    Client should delete access and refresh tokens from storage.
+
+    For stateless JWT authentication, the actual logout happens client-side
+    by deleting the tokens. This endpoint confirms the logout action.
+    """
+    logger.info("Logout request")
+    service = AuthService(db_session)
+    refresh_token = data.refresh_token if data else None
+    result = await service.logout(refresh_token)
+    logger.info("User logged out successfully")
+    return result
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    data: ForgotPasswordRequest,
+    db_session: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Initiate forgot password flow.
+
+    Sends a password reset email if the account exists.
+    For security, always returns success message even if email doesn't exist.
+    """
+    logger.info(f"Forgot password request for email: {data.email}")
+    service = AuthService(db_session)
+    
+    try:
+        reset_token = await service.forgot_password(data.email)
+        logger.info(f"Password reset token created for user")
+        
+        # TODO: Send email with reset link
+        # For now, return the token in response (remove this in production!)
+        # In production, send email and only return success message
+        return {
+            "message": "If an account exists with this email, you will receive a password reset link.",
+            "token": reset_token.token  # REMOVE THIS IN PRODUCTION
+        }
+    except Exception as e:
+        logger.error(f"Forgot password error: {str(e)}")
+        # Always return same message for security
+        return {
+            "message": "If an account exists with this email, you will receive a password reset link."
+        }
+
+
+@router.post("/reset-password")
+async def reset_password(
+    data: ResetPasswordRequest,
+    db_session: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Reset password using reset token.
+
+    Validates the token and updates the user's password.
+    """
+    logger.info(f"Reset password request with token")
+    service = AuthService(db_session)
+    user = await service.reset_password(data.token, data.new_password)
+    logger.info(f"Password reset successfully for user: {user.id}")
+    
+    return {
+        "message": "Password reset successfully. You can now login with your new password."
     }

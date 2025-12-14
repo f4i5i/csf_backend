@@ -58,3 +58,19 @@ class CheckInStatusListResponse(BaseSchema):
     class_id: str
     check_in_date: date
     statuses: List[CheckInStatusResponse]
+
+
+class TextClassRequest(BaseSchema):
+    """Schema for sending SMS to all parents in a class."""
+
+    class_id: str
+    message: str = Field(..., min_length=1, max_length=160)
+
+
+class TextClassResponse(BaseSchema):
+    """Schema for text class response."""
+
+    sent_count: int
+    failed_count: int
+    total: int
+    message: str

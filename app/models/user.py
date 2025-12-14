@@ -3,14 +3,17 @@ from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional, Sequence
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Enum, String, select
+from decimal import Decimal
+
+from sqlalchemy import Boolean, DateTime, Enum, Index, Numeric, String, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.child import Child
+    from app.models.organization import Organization
 
 
 class Role(str, enum.Enum):
@@ -21,7 +24,7 @@ class Role(str, enum.Enum):
     PARENT = "parent"
 
 
-class User(Base, TimestampMixin):
+class User(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """User model with class methods for database operations."""
 
     __tablename__ = "users"
@@ -30,7 +33,7 @@ class User(Base, TimestampMixin):
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     email: Mapped[str] = mapped_column(
-        String(255), unique=True, index=True, nullable=False
+        String(255), nullable=False
     )
     hashed_password: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
@@ -39,7 +42,9 @@ class User(Base, TimestampMixin):
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     role: Mapped[Role] = mapped_column(
-        Enum(Role), default=Role.PARENT, nullable=False
+        Enum(Role, native_enum=True, values_callable=lambda x: [e.value for e in x]),
+        default=Role.PARENT,
+        nullable=False
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -49,6 +54,9 @@ class User(Base, TimestampMixin):
     stripe_customer_id: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
+    account_credit: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("0.00"), nullable=False, server_default="0.00"
+    )
     last_login: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -56,6 +64,18 @@ class User(Base, TimestampMixin):
     # Relationships
     children: Mapped[List["Child"]] = relationship(
         "Child", back_populates="user", cascade="all, delete-orphan"
+    )
+    organization: Mapped["Organization"] = relationship(
+        "Organization", back_populates="users"
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_users_organization_email",
+            "organization_id",
+            "email",
+            unique=True,
+        ),
     )
 
     @property
@@ -104,6 +124,7 @@ class User(Base, TimestampMixin):
         email: str,
         first_name: str,
         last_name: str,
+        organization_id: str,
         hashed_password: Optional[str] = None,
         google_id: Optional[str] = None,
         role: Role = Role.PARENT,
@@ -119,6 +140,7 @@ class User(Base, TimestampMixin):
             google_id=google_id,
             role=role,
             phone=phone,
+            organization_id=organization_id,
         )
         db_session.add(user)
         await db_session.commit()

@@ -10,12 +10,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.child import Child
 from app.models.class_ import Class
 from app.models.discount import DiscountCode, Scholarship
+from app.models.enrollment import Enrollment, EnrollmentStatus
 from core.logging import get_logger
+from sqlalchemy import select
 
 logger = get_logger(__name__)
 
 
-# Sibling discount rates (auto-applied)
+# Sibling discount rates (auto-applied, family-wide)
+# Discounts are based on ALL active enrollments in the family, not just current order
+# Position is determined by sorting enrollments by price (most expensive = position 1)
+#
+# CANCELLATION POLICY: When a child's enrollment is cancelled, sibling discounts
+# for OTHER children are NOT recalculated. This prevents charging parents more
+# mid-enrollment and provides stability in pricing.
 SIBLING_DISCOUNTS = {
     2: Decimal("0.25"),  # 2nd child: 25% off
     3: Decimal("0.35"),  # 3rd child: 35% off
@@ -136,7 +144,30 @@ class PricingService:
         scholarship_map = {s.child_id: s for s in scholarships if s.child_id}
         user_scholarship = next((s for s in scholarships if not s.child_id), None)
 
-        # Sort items by price descending (highest price first - no sibling discount)
+        # Get ALL active enrollments for this user's children (family-wide sibling discount)
+        result = await self.db_session.execute(
+            select(Enrollment, Child, Class)
+            .join(Child, Child.id == Enrollment.child_id)
+            .join(Class, Class.id == Enrollment.class_id)
+            .where(
+                Child.user_id == user_id,
+                Enrollment.status == EnrollmentStatus.ACTIVE,
+            )
+        )
+        existing_enrollments = result.all()
+
+        # Build list of ALL children with enrollments (existing + new order)
+        all_children_prices = []
+
+        # Add existing enrollments
+        for enrollment, child, class_ in existing_enrollments:
+            all_children_prices.append({
+                "child_id": child.id,
+                "price": class_.price,
+                "is_new": False,  # Already enrolled
+            })
+
+        # Load and add new order items
         items_with_prices = []
         for item in items:
             class_ = await Class.get_by_id(self.db_session, item.class_id)
@@ -152,8 +183,30 @@ class PricingService:
                 "price": class_.price,
             })
 
-        # Sort by price descending (most expensive first gets no sibling discount)
-        items_with_prices.sort(key=lambda x: x["price"], reverse=True)
+            # Add to family-wide list
+            all_children_prices.append({
+                "child_id": child.id,
+                "price": class_.price,
+                "is_new": True,  # New enrollment in this order
+            })
+
+        # Sort ALL family enrollments by price descending to determine sibling order
+        # Most expensive enrollment = 1st child (no discount)
+        # Second most expensive = 2nd child (25% discount if new)
+        # etc.
+        all_children_prices.sort(key=lambda x: x["price"], reverse=True)
+
+        # Create map of child_id to sibling position (for new enrollments)
+        child_sibling_position = {}
+        for idx, child_data in enumerate(all_children_prices):
+            if child_data["is_new"]:
+                child_sibling_position[child_data["child_id"]] = idx + 1
+
+        logger.info(
+            f"Family sibling discount calculation for user {user_id}: "
+            f"{len(all_children_prices)} total enrollments, "
+            f"{len(items_with_prices)} new in this order"
+        )
 
         # Calculate each line item
         for idx, item_data in enumerate(items_with_prices):
@@ -162,20 +215,27 @@ class PricingService:
             child = item_data["child"]
             unit_price = class_.price
 
-            # Sibling discount (skip first child - most expensive)
+            # Sibling discount based on FAMILY-WIDE position
+            # Position 1 (most expensive across all family enrollments) = no discount
+            # Position 2+ = discount based on position
             sibling_discount = Decimal("0.00")
             sibling_description = None
-            if idx > 0:
-                child_number = idx + 1
+
+            child_position = child_sibling_position.get(child.id, 1)
+            if child_position > 1:
                 discount_rate = SIBLING_DISCOUNTS.get(
-                    min(child_number, 4), Decimal("0.00")
+                    min(child_position, 4), Decimal("0.00")
                 )
                 if discount_rate > 0:
                     sibling_discount = (unit_price * discount_rate).quantize(
                         Decimal("0.01")
                     )
                     percent = int(discount_rate * 100)
-                    sibling_description = f"Sibling discount ({percent}% off)"
+                    sibling_description = f"Sibling discount ({percent}% off - child #{child_position})"
+                    logger.info(
+                        f"Applied {percent}% sibling discount to {child.full_name} "
+                        f"(position {child_position} in family)"
+                    )
 
             # Scholarship discount
             scholarship_discount = Decimal("0.00")
@@ -191,12 +251,13 @@ class PricingService:
                 )
 
             # Promo code discount (applied after other discounts)
+            # NOTE: Minimum order amount validation uses unit_price (BEFORE discounts)
             promo_discount = Decimal("0.00")
             promo_description = None
             if discount_code_obj:
                 remaining = unit_price - sibling_discount - scholarship_discount
                 is_valid, _ = discount_code_obj.is_valid(
-                    order_amount=remaining,
+                    order_amount=unit_price,  # Validate against original price, not discounted
                     program_id=class_.program_id if hasattr(class_, "program_id") else None,
                     class_id=class_.id,
                 )
@@ -295,11 +356,22 @@ class PricingService:
         start_date: date,
         frequency: str,  # "weekly", "biweekly", "monthly"
     ) -> list[InstallmentScheduleItem]:
-        """Generate installment payment schedule."""
-        if num_installments < 2:
-            raise ValueError("Minimum 2 installments required")
+        """Generate installment payment schedule (supports 1 or 2 payments)."""
+        if num_installments < 1 or num_installments > 2:
+            raise ValueError("Installment plans support either 1 or 2 payments")
 
-        # Calculate installment amount (spread evenly, last one gets remainder)
+        # Single-payment installment plan (charge entire balance immediately)
+        if num_installments == 1:
+            amount = total.quantize(Decimal("0.01"))
+            return [
+                InstallmentScheduleItem(
+                    installment_number=1,
+                    due_date=start_date,
+                    amount=amount,
+                )
+            ]
+
+        # Two-payment plan
         base_amount = (total / num_installments).quantize(Decimal("0.01"))
         remainder = total - (base_amount * num_installments)
 
@@ -336,10 +408,11 @@ class PricingService:
         enrollment_amount: Decimal,
         enrolled_at: date,
         cancel_date: date = None,
-        processing_fee: Decimal = Decimal("25.00"),
     ) -> tuple[Decimal, str]:
         """
         Calculate refund amount based on 15-day cancellation policy.
+
+        The 15-day period starts from the cancellation request date.
 
         Returns (refund_amount, policy_applied)
         """
@@ -349,9 +422,8 @@ class PricingService:
         days_enrolled = (cancel_date - enrolled_at).days
 
         if days_enrolled < 15:
-            # Full refund minus processing fee
-            refund = max(enrollment_amount - processing_fee, Decimal("0.00"))
-            return refund, "Full refund (within 15 days) minus $25 processing fee"
+            # Full refund with no processing fee
+            return enrollment_amount, "Full refund (within 15 days)"
         else:
             # No refund after 15 days
             return Decimal("0.00"), "No refund (enrolled more than 15 days)"

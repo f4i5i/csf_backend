@@ -16,14 +16,14 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.class_ import Class
     from app.models.enrollment import Enrollment
 
 
-class CheckIn(Base, TimestampMixin):
+class CheckIn(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Student check-in record for a class session."""
 
     __tablename__ = "checkins"

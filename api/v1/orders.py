@@ -5,11 +5,11 @@ from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from api.deps import get_current_admin, get_current_user
+from api.deps import get_current_admin, get_current_parent_or_admin, get_current_user
 from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.models.order import Order, OrderLineItem, OrderStatus
 from app.models.payment import Payment, PaymentStatus, PaymentType
@@ -79,7 +79,7 @@ def order_to_response(order: Order) -> OrderResponse:
 @router.post("/calculate", response_model=OrderCalculation)
 async def calculate_order(
     data: OrderCalculateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> OrderCalculation:
     """
@@ -139,7 +139,7 @@ async def calculate_order(
 @router.post("/", response_model=OrderResponse)
 async def create_order(
     data: OrderCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> OrderResponse:
     """
@@ -148,6 +148,60 @@ async def create_order(
     Creates draft order with enrollments. Payment is handled separately.
     """
     logger.info(f"Create order for user: {current_user.id}")
+
+    # Verify all required waivers are accepted before allowing order creation
+    from app.models.waiver import WaiverTemplate, WaiverAcceptance
+    from app.models.class_ import Class
+
+    class_ids = [item.class_id for item in data.items]
+
+    # Get all classes to find program/school IDs
+    result = await db_session.execute(
+        select(Class).where(Class.id.in_(class_ids))
+    )
+    classes = result.scalars().all()
+
+    # Get all required waivers for these classes
+    program_ids = list(set([c.program_id for c in classes if c.program_id]))
+    school_ids = list(set([c.school_id for c in classes if c.school_id]))
+
+    # Get waivers (global + program-specific + school-specific)
+    result = await db_session.execute(
+        select(WaiverTemplate).where(
+            and_(
+                WaiverTemplate.is_active == True,
+                or_(
+                    and_(
+                        WaiverTemplate.applies_to_program_id.is_(None),
+                        WaiverTemplate.applies_to_school_id.is_(None)
+                    ),
+                    WaiverTemplate.applies_to_program_id.in_(program_ids) if program_ids else False,
+                    WaiverTemplate.applies_to_school_id.in_(school_ids) if school_ids else False
+                )
+            )
+        )
+    )
+    required_waivers = result.scalars().all()
+
+    # Check if user has accepted all required waivers
+    if required_waivers:
+        result = await db_session.execute(
+            select(WaiverAcceptance).where(
+                WaiverAcceptance.user_id == current_user.id
+            )
+        )
+        user_acceptances = result.scalars().all()
+        accepted_waiver_ids = set([a.waiver_template_id for a in user_acceptances])
+
+        missing_waivers = []
+        for waiver in required_waivers:
+            if waiver.id not in accepted_waiver_ids:
+                missing_waivers.append(waiver.waiver_type.value)
+
+        if missing_waivers:
+            raise BadRequestException(
+                message=f"Please accept all required waivers before checkout: {', '.join(missing_waivers)}"
+            )
 
     pricing_service = PricingService(db_session)
 
@@ -249,7 +303,7 @@ async def create_order(
 
 @router.get("/my", response_model=OrderListResponse)
 async def list_my_orders(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> OrderListResponse:
     """
@@ -274,7 +328,7 @@ async def list_my_orders(
 @router.get("/{order_id}", response_model=OrderResponse)
 async def get_order(
     order_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> OrderResponse:
     """
@@ -306,7 +360,7 @@ async def get_order(
 async def create_payment_for_order(
     order_id: str,
     payment_method_id: str = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> PaymentIntentResponse:
     """
@@ -369,7 +423,7 @@ async def create_payment_for_order(
 @router.post("/{order_id}/cancel")
 async def cancel_order(
     order_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> dict:
     """

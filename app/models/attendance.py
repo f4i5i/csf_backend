@@ -20,7 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.class_ import Class
@@ -36,7 +36,7 @@ class AttendanceStatus(str, enum.Enum):
     EXCUSED = "excused"
 
 
-class Attendance(Base, TimestampMixin):
+class Attendance(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Attendance record for class sessions."""
 
     __tablename__ = "attendances"
@@ -55,7 +55,7 @@ class Attendance(Base, TimestampMixin):
         Enum(AttendanceStatus), nullable=False
     )
     marked_by: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=False
+        String(36), ForeignKey("users.id"), nullable=False, index=True
     )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

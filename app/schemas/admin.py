@@ -125,3 +125,58 @@ class ClassRosterResponse(BaseSchema):
     capacity: int
     current_enrollment: int
     students: List[RosterStudentResponse]
+
+
+class RefundItemResponse(BaseSchema):
+    """Schema for individual refund in search results."""
+
+    payment_id: str
+    order_id: str
+    user_id: str
+    user_email: str
+    user_name: str
+    original_amount: float
+    refund_amount: float
+    payment_status: str
+    payment_type: str
+    refunded_at: Optional[datetime]
+    created_at: datetime
+    order_items: List[Dict[str, Any]]  # Order line items with class/enrollment info
+
+
+class RefundSearchResponse(BaseSchema):
+    """Schema for refund search results."""
+
+    items: List[RefundItemResponse]
+    total: int
+    skip: int
+    limit: int
+    total_refunded: float  # Sum of all refund amounts in results
+
+
+class PendingRefundResponse(BaseSchema):
+    """Schema for pending refund in approval queue."""
+
+    payment_id: str
+    order_id: str
+    user_id: str
+    user_email: str
+    user_name: str
+    original_amount: float
+    refund_amount: float
+    refund_requested_at: datetime
+    payment_type: str
+    order_details: Optional[str]  # Brief order summary
+
+
+class PendingRefundsListResponse(BaseSchema):
+    """Schema for list of pending refunds."""
+
+    items: List[PendingRefundResponse]
+    total: int
+
+
+class RefundApprovalRequest(BaseSchema):
+    """Schema for refund approval/rejection request."""
+
+    rejection_reason: Optional[str] = None  # Required for rejection

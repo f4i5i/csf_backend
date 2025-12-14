@@ -17,7 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.class_ import Class
@@ -39,7 +39,7 @@ class AttachmentType(str, enum.Enum):
     IMAGE = "image"
 
 
-class Announcement(Base, TimestampMixin):
+class Announcement(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Announcement/Post model created by coaches."""
 
     __tablename__ = "announcements"
@@ -165,11 +165,15 @@ class Announcement(Base, TimestampMixin):
         db_session.add(announcement)
         await db_session.flush()
 
+        # Get organization_id from announcement
+        organization_id = announcement.organization_id
+
         # Create targets
         for class_id in class_ids:
             target = AnnouncementTarget(
                 announcement_id=announcement.id,
-                class_id=class_id
+                class_id=class_id,
+                organization_id=organization_id
             )
             db_session.add(target)
 
@@ -191,7 +195,7 @@ class Announcement(Base, TimestampMixin):
         return self
 
 
-class AnnouncementAttachment(Base, TimestampMixin):
+class AnnouncementAttachment(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Attachment files for announcements (PDFs, images)."""
 
     __tablename__ = "announcement_attachments"
@@ -222,7 +226,7 @@ class AnnouncementAttachment(Base, TimestampMixin):
         return result.scalars().first()
 
 
-class AnnouncementTarget(Base, TimestampMixin):
+class AnnouncementTarget(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Many-to-many relationship between announcements and classes."""
 
     __tablename__ = "announcement_targets"

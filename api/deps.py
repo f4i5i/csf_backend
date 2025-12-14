@@ -71,3 +71,19 @@ async def get_current_staff(
     if current_user.role not in [Role.COACH, Role.ADMIN, Role.OWNER]:
         raise ForbiddenException(message="Coach/staff access required")
     return current_user
+
+
+async def get_current_parent_or_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """
+    Get the current user if they have parent, admin, or owner role.
+
+    This dependency is used for financial endpoints to exclude coach/staff access.
+    Staff should not have access to financial data (payments, orders, etc.).
+    """
+    if current_user.role not in [Role.PARENT, Role.ADMIN, Role.OWNER]:
+        raise ForbiddenException(
+            message="Access denied. Financial data is restricted to parents and administrators."
+        )
+    return current_user

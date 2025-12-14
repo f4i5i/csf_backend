@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.deps import get_current_admin, get_current_user
+from api.deps import get_current_admin, get_current_parent_or_admin, get_current_user
 from app.models.order import Order
 from app.models.payment import (
     InstallmentFrequency,
@@ -21,6 +21,7 @@ from app.schemas.payment import (
     InstallmentPlanResponse,
     InstallmentScheduleItem,
     InstallmentSchedulePreview,
+    InstallmentSummaryResponse,
 )
 from app.services.installment_service import InstallmentService
 from app.services.pricing_service import PricingService
@@ -74,14 +75,14 @@ def installment_payment_to_response(
 @router.post("/preview", response_model=InstallmentSchedulePreview)
 async def preview_installment_schedule(
     order_id: str,
-    num_installments: int = Query(..., ge=2, le=12),
+    num_installments: int = Query(..., ge=2, le=2),  # Max 2 installments
     frequency: str = Query(..., regex="^(weekly|biweekly|monthly)$"),
     start_date: Optional[date] = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> InstallmentSchedulePreview:
     """
-    Preview installment payment schedule before creating plan.
+    Preview installment payment schedule before creating plan (max 2 payments).
 
     Shows breakdown of payment amounts and due dates.
     """
@@ -134,7 +135,7 @@ async def preview_installment_schedule(
 @router.post("/", response_model=InstallmentPlanResponse)
 async def create_installment_plan(
     data: InstallmentPlanCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> InstallmentPlanResponse:
     """
@@ -179,7 +180,7 @@ async def get_my_installment_plans(
     status: Optional[str] = Query(
         None, regex="^(active|completed|cancelled|defaulted)$"
     ),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> list[InstallmentPlanResponse]:
     """
@@ -202,13 +203,99 @@ async def get_my_installment_plans(
     return [plan_to_response(plan) for plan in plans]
 
 
+@router.get("/summary", response_model=InstallmentSummaryResponse)
+async def get_installment_summary(
+    current_user: User = Depends(get_current_parent_or_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> InstallmentSummaryResponse:
+    """
+    Get summary of all installment plans for current user.
+
+    Returns aggregated statistics including:
+    - Count of plans by status
+    - Total amount owed (sum of pending installments)
+    - Next upcoming payment details
+    - Total paid installments count
+    """
+    from sqlalchemy import select, func
+    from sqlalchemy.orm import selectinload
+    from decimal import Decimal
+
+    logger.info(f"Get installment summary for user: {current_user.id}")
+
+    # Get all installment plans for user with their payments
+    stmt = (
+        select(InstallmentPlan)
+        .where(InstallmentPlan.user_id == current_user.id)
+        .options(selectinload(InstallmentPlan.installment_payments))
+    )
+    result = await db_session.execute(stmt)
+    plans = result.scalars().all()
+
+    if not plans:
+        # No plans - return empty summary
+        return InstallmentSummaryResponse(
+            active_plans_count=0,
+            completed_plans_count=0,
+            cancelled_plans_count=0,
+            total_amount_owed=Decimal("0.00"),
+            next_payment_amount=None,
+            next_payment_due=None,
+            total_paid_count=0,
+        )
+
+    # Initialize counters
+    active_count = 0
+    completed_count = 0
+    cancelled_count = 0
+    total_owed = Decimal("0.00")
+    total_paid = 0
+    next_payment_amount = None
+    next_payment_due = None
+
+    # Process each plan
+    for plan in plans:
+        # Count by status
+        if plan.status == InstallmentPlanStatus.ACTIVE:
+            active_count += 1
+        elif plan.status == InstallmentPlanStatus.COMPLETED:
+            completed_count += 1
+        elif plan.status == InstallmentPlanStatus.CANCELLED:
+            cancelled_count += 1
+
+        # Process payments
+        for payment in plan.installment_payments:
+            from app.models.payment import InstallmentPaymentStatus
+
+            if payment.status == InstallmentPaymentStatus.PAID:
+                total_paid += 1
+            elif payment.status == InstallmentPaymentStatus.PENDING:
+                # Add to total owed
+                total_owed += payment.amount
+
+                # Check if this is the earliest upcoming payment
+                if next_payment_due is None or payment.due_date < next_payment_due:
+                    next_payment_due = payment.due_date
+                    next_payment_amount = payment.amount
+
+    return InstallmentSummaryResponse(
+        active_plans_count=active_count,
+        completed_plans_count=completed_count,
+        cancelled_plans_count=cancelled_count,
+        total_amount_owed=total_owed,
+        next_payment_amount=next_payment_amount,
+        next_payment_due=next_payment_due,
+        total_paid_count=total_paid,
+    )
+
+
 # ============== Get Installment Plan Details ==============
 
 
 @router.get("/{plan_id}", response_model=InstallmentPlanResponse)
 async def get_installment_plan(
     plan_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> InstallmentPlanResponse:
     """
@@ -230,7 +317,7 @@ async def get_installment_plan(
 @router.get("/{plan_id}/schedule", response_model=list[InstallmentPaymentResponse])
 async def get_installment_schedule(
     plan_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> list[InstallmentPaymentResponse]:
     """
@@ -257,7 +344,7 @@ async def get_installment_schedule(
 @router.get("/upcoming/due", response_model=list[InstallmentPaymentResponse])
 async def get_upcoming_installments(
     days_ahead: int = Query(7, ge=1, le=90),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> list[InstallmentPaymentResponse]:
     """
@@ -285,7 +372,7 @@ async def get_upcoming_installments(
 @router.post("/{plan_id}/cancel", response_model=InstallmentPlanResponse)
 async def cancel_installment_plan(
     plan_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> InstallmentPlanResponse:
     """

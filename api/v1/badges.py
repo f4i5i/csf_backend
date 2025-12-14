@@ -13,6 +13,8 @@ from app.schemas.badge import (
     BadgeListResponse,
     BadgeProgressResponse,
     BadgeResponse,
+    ChildBadgeStatusResponse,
+    ChildBadgeSummaryResponse,
     StudentBadgeListResponse,
     StudentBadgeResponse,
     StudentBadgeStatusResponse,
@@ -79,6 +81,124 @@ async def get_student_badges(
         )
 
     return StudentBadgeListResponse(enrollment_id=enrollment_id, badges=items)
+
+
+@router.get("/child/{child_id}", response_model=ChildBadgeSummaryResponse)
+async def get_child_badges_aggregated(
+    child_id: str,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ChildBadgeSummaryResponse:
+    """Get all badges for a child, aggregated across all enrollments."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from app.models.child import Child
+    from app.models.enrollment import EnrollmentStatus
+
+    # Verify child exists
+    child = await Child.get_by_id(db_session, child_id)
+    if not child:
+        raise NotFoundException(message="Child not found")
+
+    # Permission check
+    if (
+        child.user_id != current_user.id
+        and current_user.role not in [Role.COACH, Role.ADMIN, Role.OWNER]
+    ):
+        raise ForbiddenException(message="Not authorized")
+
+    # Get all active enrollments for child
+    stmt = select(Enrollment).where(
+        Enrollment.child_id == child_id,
+        Enrollment.status == EnrollmentStatus.ACTIVE
+    )
+    result = await db_session.execute(stmt)
+    enrollments = result.scalars().all()
+
+    # Get all available badges
+    all_badges = await Badge.get_all_active(db_session)
+
+    if not enrollments:
+        # No enrollments - return all badges as locked
+        items = [
+            ChildBadgeStatusResponse(
+                badge=BadgeResponse.model_validate(badge),
+                is_unlocked=False,
+                awarded_at=None,
+                total_count=0,
+                enrollment_count=0,
+            )
+            for badge in all_badges
+        ]
+        return ChildBadgeSummaryResponse(
+            child_id=child_id,
+            badges=items,
+            total_unlocked=0,
+            total_badges=len(all_badges)
+        )
+
+    # Get all earned badges across all enrollments
+    enrollment_ids = [e.id for e in enrollments]
+    stmt = (
+        select(StudentBadge)
+        .where(StudentBadge.enrollment_id.in_(enrollment_ids))
+        .options(selectinload(StudentBadge.badge))
+    )
+    result = await db_session.execute(stmt)
+    student_badges = result.scalars().all()
+
+    # Aggregate by badge_id (deduplicate)
+    badge_aggregation = {}
+
+    for sb in student_badges:
+        badge_id = sb.badge_id
+        if badge_id not in badge_aggregation:
+            badge_aggregation[badge_id] = {
+                'badge': sb.badge,
+                'most_recent_award': sb.awarded_at,
+                'count': 1,
+                'enrollments': {sb.enrollment_id}
+            }
+        else:
+            badge_aggregation[badge_id]['count'] += 1
+            badge_aggregation[badge_id]['enrollments'].add(sb.enrollment_id)
+            # Keep most recent award
+            if sb.awarded_at > badge_aggregation[badge_id]['most_recent_award']:
+                badge_aggregation[badge_id]['most_recent_award'] = sb.awarded_at
+
+    # Build response
+    items = []
+    for badge in all_badges:
+        is_unlocked = badge.id in badge_aggregation
+
+        if is_unlocked:
+            agg = badge_aggregation[badge.id]
+            items.append(
+                ChildBadgeStatusResponse(
+                    badge=BadgeResponse.model_validate(badge),
+                    is_unlocked=True,
+                    awarded_at=agg['most_recent_award'],
+                    total_count=agg['count'],
+                    enrollment_count=len(agg['enrollments']),
+                )
+            )
+        else:
+            items.append(
+                ChildBadgeStatusResponse(
+                    badge=BadgeResponse.model_validate(badge),
+                    is_unlocked=False,
+                    awarded_at=None,
+                    total_count=0,
+                    enrollment_count=0,
+                )
+            )
+
+    return ChildBadgeSummaryResponse(
+        child_id=child_id,
+        badges=items,
+        total_unlocked=len(badge_aggregation),
+        total_badges=len(all_badges)
+    )
 
 
 @router.post(

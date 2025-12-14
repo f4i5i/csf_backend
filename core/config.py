@@ -61,11 +61,16 @@ class Settings(BaseSettings):
     MAILCHIMP_SERVER_PREFIX: str = "us1"
     MAILCHIMP_AUDIENCE_ID: str = ""
 
+    # SMS - Twilio
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_PHONE_NUMBER: str = ""  # Your Twilio phone number in E.164 format
+
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # CORS
-    CORS_ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
+    CORS_ALLOWED_ORIGINS: List[str] = ["https://csf-app.vercel.app", "http://localhost:3000", "http://localhost:3001"]
 
     # Encryption
     ENCRYPTION_KEY: str = ""

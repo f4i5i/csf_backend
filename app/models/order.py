@@ -20,7 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 if TYPE_CHECKING:
     from app.models.discount import DiscountCode
@@ -39,7 +39,7 @@ class OrderStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
-class Order(Base, TimestampMixin):
+class Order(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Order record for purchases."""
 
     __tablename__ = "orders"
@@ -156,7 +156,7 @@ class Order(Base, TimestampMixin):
         self.total = self.subtotal - self.discount_total
 
 
-class OrderLineItem(Base, TimestampMixin):
+class OrderLineItem(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Individual line item in an order."""
 
     __tablename__ = "order_line_items"
@@ -165,10 +165,10 @@ class OrderLineItem(Base, TimestampMixin):
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     order_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("orders.id", ondelete="CASCADE"), nullable=False
+        String(36), ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True
     )
     enrollment_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("enrollments.id"), nullable=True
+        String(36), ForeignKey("enrollments.id"), nullable=True, index=True
     )
 
     # Item details
@@ -180,7 +180,7 @@ class OrderLineItem(Base, TimestampMixin):
 
     # Discount
     discount_code_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("discount_codes.id"), nullable=True
+        String(36), ForeignKey("discount_codes.id"), nullable=True, index=True
     )
     discount_amount: Mapped[Decimal] = mapped_column(
         Numeric(10, 2), nullable=False, default=Decimal("0.00")

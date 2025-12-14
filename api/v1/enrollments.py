@@ -1,13 +1,19 @@
 """Enrollment API endpoints for managing class enrollments."""
 
 from datetime import date, datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from api.deps import get_current_admin, get_current_user
+from api.deps import (
+    get_current_admin,
+    get_current_parent_or_admin,
+    get_current_user,
+    get_current_staff,
+)
 from app.models.child import Child
 from app.models.class_ import Class
 from app.models.enrollment import Enrollment, EnrollmentStatus
@@ -15,10 +21,15 @@ from app.models.user import User
 from app.tasks.email_tasks import send_cancellation_confirmation_email
 from app.schemas.enrollment import (
     CancellationRefundPreview,
+    ClaimWaitlistRequest,
     EnrollmentCancel,
     EnrollmentListResponse,
     EnrollmentResponse,
     EnrollmentTransfer,
+    JoinWaitlistRequest,
+    PromoteWaitlistRequest,
+    WaitlistEntryResponse,
+    WaitlistListResponse,
 )
 from app.services.pricing_service import PricingService
 from core.db import get_db
@@ -67,6 +78,10 @@ async def enrollment_to_response(
         final_price=enrollment.final_price,
         created_at=enrollment.created_at,
         updated_at=enrollment.updated_at,
+        waitlist_priority=enrollment.waitlist_priority,
+        auto_promote=enrollment.auto_promote,
+        claim_window_expires_at=enrollment.claim_window_expires_at,
+        promoted_at=enrollment.promoted_at,
         child_name=child_name,
         class_name=class_name,
     )
@@ -78,20 +93,33 @@ async def enrollment_to_response(
 @router.get("/my", response_model=EnrollmentListResponse)
 async def list_my_enrollments(
     status: str = None,
-    current_user: User = Depends(get_current_user),
+    child_id: Optional[str] = None,
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> EnrollmentListResponse:
     """
     List all enrollments for the current user.
 
-    Can filter by status.
+    Can filter by status and child_id.
     """
-    logger.info(f"List enrollments for user: {current_user.id}")
+    logger.info(f"List enrollments for user: {current_user.id}, child_id: {child_id}")
+
+    # If child_id is provided, verify child belongs to current user (security check)
+    if child_id:
+        child_result = await db_session.execute(
+            select(Child).where(Child.id == child_id, Child.user_id == current_user.id)
+        )
+        child = child_result.scalar_one_or_none()
+        if not child and current_user.role.value not in ["owner", "admin"]:
+            raise ForbiddenException(message="You don't have access to this child")
 
     query = select(Enrollment).where(Enrollment.user_id == current_user.id)
 
     if status:
         query = query.where(Enrollment.status == EnrollmentStatus(status))
+
+    if child_id:
+        query = query.where(Enrollment.child_id == child_id)
 
     query = query.order_by(Enrollment.created_at.desc())
 
@@ -106,7 +134,7 @@ async def list_my_enrollments(
 @router.get("/{enrollment_id}", response_model=EnrollmentResponse)
 async def get_enrollment(
     enrollment_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> EnrollmentResponse:
     """
@@ -135,7 +163,7 @@ async def get_enrollment(
 @router.get("/{enrollment_id}/cancellation-preview", response_model=CancellationRefundPreview)
 async def preview_cancellation(
     enrollment_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> CancellationRefundPreview:
     """
@@ -180,7 +208,7 @@ async def preview_cancellation(
         days_enrolled=days_enrolled,
         refund_amount=refund_amount,
         policy_applied=policy,
-        processing_fee=25 if days_enrolled < 15 else 0,
+        processing_fee=0,  # No processing fee
     )
 
 
@@ -188,14 +216,14 @@ async def preview_cancellation(
 async def cancel_enrollment(
     enrollment_id: str,
     data: EnrollmentCancel = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     Cancel an enrollment.
 
-    Refund is calculated based on 15-day policy:
-    - Within 15 days: Full refund minus $25 processing fee
+    Refund is calculated based on 15-day policy from cancellation request date:
+    - Within 15 days: Full refund (no processing fee)
     - After 15 days: No refund
     """
     logger.info(f"Cancel enrollment {enrollment_id} by user: {current_user.id}")
@@ -259,7 +287,7 @@ async def cancel_enrollment(
 async def transfer_enrollment(
     enrollment_id: str,
     data: EnrollmentTransfer,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> EnrollmentResponse:
     """
@@ -330,6 +358,233 @@ async def transfer_enrollment(
     return await enrollment_to_response(enrollment, db_session)
 
 
+# ============== Waitlist Endpoints ==============
+
+
+@router.post("/waitlist/join", response_model=EnrollmentResponse)
+async def join_waitlist(
+    data: JoinWaitlistRequest,
+    current_user: User = Depends(get_current_parent_or_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> EnrollmentResponse:
+    """
+    Join waitlist for a full class.
+
+    Priority waitlist (auto-charge): Requires payment method on file.
+    Regular waitlist: 12-hour claim window when spot opens.
+    """
+    logger.info(f"User {current_user.id} joining waitlist for class {data.class_id}")
+
+    # Verify child belongs to user
+    child_result = await db_session.execute(
+        select(Child).where(Child.id == data.child_id, Child.user_id == current_user.id)
+    )
+    child = child_result.scalar_one_or_none()
+    if not child:
+        raise NotFoundException(message="Child not found")
+
+    # Verify class exists
+    class_result = await db_session.execute(select(Class).where(Class.id == data.class_id))
+    class_ = class_result.scalar_one_or_none()
+    if not class_:
+        raise NotFoundException(message="Class not found")
+
+    # Check if child already enrolled or waitlisted
+    existing_result = await db_session.execute(
+        select(Enrollment).where(
+            Enrollment.child_id == data.child_id,
+            Enrollment.class_id == data.class_id,
+            Enrollment.status.in_([EnrollmentStatus.ACTIVE, EnrollmentStatus.WAITLISTED, EnrollmentStatus.PENDING]),
+        )
+    )
+    if existing_result.scalar_one_or_none():
+        raise BadRequestException(message="Child is already enrolled or waitlisted for this class")
+
+    # Validate priority level
+    if data.priority not in ["priority", "regular"]:
+        raise BadRequestException(message="Invalid priority level. Must be 'priority' or 'regular'")
+
+    # Priority waitlist requires payment method
+    if data.priority == "priority" and not data.payment_method_id:
+        raise BadRequestException(message="Priority waitlist requires a payment method")
+
+    # Create waitlist enrollment
+    pricing_service = PricingService(db_session)
+    order_data = await pricing_service.calculate_order(
+        user_id=current_user.id,
+        items=[{"class_id": data.class_id, "child_id": data.child_id}],
+    )
+
+    enrollment = Enrollment(
+        child_id=data.child_id,
+        class_id=data.class_id,
+        user_id=current_user.id,
+        status=EnrollmentStatus.WAITLISTED,
+        waitlist_priority=data.priority,
+        auto_promote=(data.priority == "priority"),
+        base_price=class_.base_price,
+        discount_amount=order_data["items"][0]["discount_amount"],
+        final_price=order_data["items"][0]["final_price"],
+    )
+
+    db_session.add(enrollment)
+    await db_session.commit()
+    await db_session.refresh(enrollment)
+
+    return await enrollment_to_response(enrollment, db_session)
+
+
+@router.post("/{enrollment_id}/waitlist/claim", response_model=EnrollmentResponse)
+async def claim_waitlist_spot(
+    enrollment_id: str,
+    data: ClaimWaitlistRequest,
+    current_user: User = Depends(get_current_parent_or_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> EnrollmentResponse:
+    """
+    Claim a regular waitlist spot within the 12-hour window.
+
+    Requires payment method to complete the claim.
+    """
+    logger.info(f"User {current_user.id} claiming waitlist spot for enrollment {enrollment_id}")
+
+    result = await db_session.execute(
+        select(Enrollment).where(Enrollment.id == enrollment_id)
+    )
+    enrollment = result.scalar_one_or_none()
+
+    if not enrollment:
+        raise NotFoundException(message="Enrollment not found")
+
+    # Check access
+    if enrollment.user_id != current_user.id:
+        raise ForbiddenException(message="You don't have access to this enrollment")
+
+    # Claim the spot (will validate status, priority, and window)
+    try:
+        await enrollment.claim_waitlist_spot(db_session)
+    except ValueError as e:
+        raise BadRequestException(message=str(e))
+
+    # TODO: Process payment with data.payment_method_id
+    # For now, we just mark it as claimed
+
+    await db_session.refresh(enrollment)
+    return await enrollment_to_response(enrollment, db_session)
+
+
+@router.get("/waitlist/class/{class_id}", response_model=WaitlistListResponse)
+async def get_class_waitlist(
+    class_id: str,
+    current_user: User = Depends(get_current_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> WaitlistListResponse:
+    """
+    Get waitlist for a class (admin only).
+
+    Returns all waitlisted enrollments ordered by priority and creation time.
+    """
+    logger.info(f"Admin {current_user.id} viewing waitlist for class {class_id}")
+
+    # Verify class exists
+    class_result = await db_session.execute(select(Class).where(Class.id == class_id))
+    class_ = class_result.scalar_one_or_none()
+    if not class_:
+        raise NotFoundException(message="Class not found")
+
+    # Get waitlisted enrollments
+    enrollments = await Enrollment.get_waitlisted_by_class(db_session, class_id)
+
+    # Build response with position information
+    entries = []
+    priority_count = 0
+    regular_count = 0
+
+    for idx, enrollment in enumerate(enrollments, start=1):
+        # Get child name
+        child_result = await db_session.execute(
+            select(Child).where(Child.id == enrollment.child_id)
+        )
+        child = child_result.scalar_one_or_none()
+
+        if enrollment.waitlist_priority == "priority":
+            priority_count += 1
+        else:
+            regular_count += 1
+
+        entries.append(
+            WaitlistEntryResponse(
+                enrollment_id=enrollment.id,
+                child_id=enrollment.child_id,
+                child_name=child.full_name if child else "Unknown",
+                class_id=enrollment.class_id,
+                class_name=class_.name,
+                waitlist_priority=enrollment.waitlist_priority,
+                position=idx,
+                auto_promote=enrollment.auto_promote,
+                claim_window_expires_at=enrollment.claim_window_expires_at,
+                created_at=enrollment.created_at,
+            )
+        )
+
+    return WaitlistListResponse(
+        class_id=class_id,
+        class_name=class_.name,
+        total_waitlisted=len(entries),
+        priority_count=priority_count,
+        regular_count=regular_count,
+        entries=entries,
+    )
+
+
+@router.post("/{enrollment_id}/waitlist/promote", response_model=EnrollmentResponse)
+async def promote_from_waitlist(
+    enrollment_id: str,
+    data: PromoteWaitlistRequest = None,
+    current_user: User = Depends(get_current_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> EnrollmentResponse:
+    """
+    Manually promote an enrollment from waitlist to active (admin only).
+
+    Can optionally skip payment requirement.
+    """
+    logger.info(f"Admin {current_user.id} promoting enrollment {enrollment_id} from waitlist")
+
+    result = await db_session.execute(
+        select(Enrollment).where(Enrollment.id == enrollment_id)
+    )
+    enrollment = result.scalar_one_or_none()
+
+    if not enrollment:
+        raise NotFoundException(message="Enrollment not found")
+
+    # Verify class has capacity
+    class_result = await db_session.execute(
+        select(Class).where(Class.id == enrollment.class_id)
+    )
+    class_ = class_result.scalar_one_or_none()
+
+    if class_ and class_.current_enrollment >= class_.capacity:
+        raise BadRequestException(message="Class is full")
+
+    # Promote
+    try:
+        await enrollment.promote_from_waitlist(db_session)
+    except ValueError as e:
+        raise BadRequestException(message=str(e))
+
+    # Update class enrollment count
+    if class_:
+        class_.current_enrollment += 1
+        await db_session.commit()
+
+    # TODO: Process payment if not skip_payment
+
+    await db_session.refresh(enrollment)
+    return await enrollment_to_response(enrollment, db_session)
+
+
 # ============== Admin Endpoints ==============
 
 
@@ -373,6 +628,30 @@ async def list_all_enrollments(
     total = len(count_result.scalars().all())
 
     return EnrollmentListResponse(items=items, total=total)
+
+
+@router.get("/class/{class_id}", response_model=EnrollmentListResponse)
+async def list_enrollments_by_class(
+    class_id: str,
+    status: Optional[str] = None,
+    current_user: User = Depends(get_current_staff),
+    db_session: AsyncSession = Depends(get_db),
+) -> EnrollmentListResponse:
+    """List enrollments for a specific class (coach/admin/owner)."""
+    logger.info(
+        f"List enrollments for class {class_id} requested by user: {current_user.id}"
+    )
+
+    query = select(Enrollment).where(Enrollment.class_id == class_id)
+    if status:
+        query = query.where(Enrollment.status == EnrollmentStatus(status))
+
+    query = query.order_by(Enrollment.created_at.desc())
+    result = await db_session.execute(query)
+    enrollments = result.scalars().all()
+
+    items = [await enrollment_to_response(e, db_session) for e in enrollments]
+    return EnrollmentListResponse(items=items, total=len(items))
 
 
 @router.post("/{enrollment_id}/activate", response_model=EnrollmentResponse)

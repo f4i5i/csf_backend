@@ -17,14 +17,15 @@ from sqlalchemy import (
     Time,
     and_,
     func,
+    or_,
     select,
     update,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
 from app.models.program import Program, School
-from core.db import Base, TimestampMixin
+from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 
 class ClassType(str, enum.Enum):
@@ -32,6 +33,16 @@ class ClassType(str, enum.Enum):
 
     SHORT_TERM = "short_term"
     MEMBERSHIP = "membership"
+    ONE_TIME = "one-time"  # Single session class
+
+
+class BillingModel(str, enum.Enum):
+    """Billing model for class pricing."""
+
+    ONE_TIME = "one_time"  # Single payment
+    MONTHLY = "monthly"  # Recurring monthly subscription
+    QUARTERLY = "quarterly"  # Recurring quarterly subscription
+    ANNUAL = "annual"  # Recurring annual subscription
 
 
 class Weekday(str, enum.Enum):
@@ -46,7 +57,7 @@ class Weekday(str, enum.Enum):
     SUNDAY = "sunday"
 
 
-class Class(Base, TimestampMixin):
+class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Class model representing sports class offerings."""
 
     __tablename__ = "classes"
@@ -59,25 +70,56 @@ class Class(Base, TimestampMixin):
     ledger_code: Mapped[Optional[str]] = mapped_column(
         String(50), nullable=True
     )  # For accounting export
+    school_code: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )  # School ledger code
     image_url: Mapped[Optional[str]] = mapped_column(
         String(500), nullable=True
     )  # Class photo/logo
+    website_link: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )  # External class information URL
     program_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("programs.id"), nullable=False
+        String(36), ForeignKey("programs.id"), nullable=False, index=True
     )
-    school_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("schools.id"), nullable=False
+    area_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, index=True
+    )  # Location/Area identifier
+    school_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("schools.id"), nullable=True, index=True
     )
-    class_type: Mapped[ClassType] = mapped_column(Enum(ClassType), nullable=False)
+    coach_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, index=True
+    )  # Coach/instructor assignment
+    class_type: Mapped[ClassType] = mapped_column(
+        Enum(ClassType, name="classtype", values_callable=lambda x: [e.value for e in x]),
+        nullable=False
+    )
 
     # Schedule
-    weekdays: Mapped[List[str]] = mapped_column(
-        JSON, nullable=False
+    weekdays: Mapped[Optional[List[str]]] = mapped_column(
+        JSON, nullable=True
     )  # ["monday", "wednesday"]
-    start_time: Mapped[time] = mapped_column(Time, nullable=False)
-    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+    start_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
+    end_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    # Registration Period
+    registration_start_date: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )  # When registration opens
+    registration_end_date: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )  # When registration closes
+
+    # Recurrence Pattern
+    recurrence_pattern: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )  # weekly, monthly, one-time
+    repeat_every_weeks: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=1
+    )  # Number of weeks between repetitions
 
     # Capacity
     capacity: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -93,6 +135,34 @@ class Class(Base, TimestampMixin):
         Boolean, default=False, nullable=False
     )
 
+    # Billing model (determines payment structure)
+    billing_model: Mapped[BillingModel] = mapped_column(
+        Enum(BillingModel), default=BillingModel.ONE_TIME, nullable=False
+    )
+    monthly_price: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    quarterly_price: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    annual_price: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+
+    # Stripe Product/Price IDs (for subscription billing)
+    stripe_product_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    stripe_monthly_price_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    stripe_quarterly_price_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    stripe_annual_price_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
     # Age requirements
     min_age: Mapped[int] = mapped_column(Integer, nullable=False)
     max_age: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -101,7 +171,7 @@ class Class(Base, TimestampMixin):
 
     # Relationships
     program: Mapped["Program"] = relationship("Program", back_populates="classes")
-    school: Mapped["School"] = relationship("School", back_populates="classes")
+    school: Mapped[Optional["School"]] = relationship("School", back_populates="classes")
 
     @property
     def has_capacity(self) -> bool:
@@ -113,12 +183,43 @@ class Class(Base, TimestampMixin):
         """Get number of available spots."""
         return max(0, self.capacity - self.current_enrollment)
 
+    def get_subscription_price(self) -> Optional[Decimal]:
+        """Get subscription price based on billing model."""
+        if self.billing_model == BillingModel.ONE_TIME:
+            return None
+        elif self.billing_model == BillingModel.MONTHLY:
+            return self.monthly_price or self.membership_price
+        elif self.billing_model == BillingModel.QUARTERLY:
+            return self.quarterly_price
+        elif self.billing_model == BillingModel.ANNUAL:
+            return self.annual_price
+        return None
+
+    def get_stripe_price_id(self) -> Optional[str]:
+        """Get Stripe Price ID based on billing model."""
+        if self.billing_model == BillingModel.ONE_TIME:
+            return None
+        elif self.billing_model == BillingModel.MONTHLY:
+            return self.stripe_monthly_price_id
+        elif self.billing_model == BillingModel.QUARTERLY:
+            return self.stripe_quarterly_price_id
+        elif self.billing_model == BillingModel.ANNUAL:
+            return self.stripe_annual_price_id
+        return None
+
+    @property
+    def is_subscription_based(self) -> bool:
+        """Check if this class uses subscription billing."""
+        return self.billing_model != BillingModel.ONE_TIME
+
     @classmethod
     async def get_by_id(
         cls, db_session: AsyncSession, id: str
     ) -> Optional["Class"]:
         """Get class by ID."""
-        result = await db_session.execute(select(cls).where(cls.id == id))
+        result = await db_session.execute(
+            select(cls).options(selectinload(cls.school)).where(cls.id == id)
+        )
         return result.scalars().first()
 
     @classmethod
@@ -131,6 +232,7 @@ class Class(Base, TimestampMixin):
         has_capacity: Optional[bool] = None,
         min_age: Optional[int] = None,
         max_age: Optional[int] = None,
+        search: Optional[str] = None,
         skip: int = 0,
         limit: int = 20,
     ) -> Tuple[Sequence["Class"], int]:
@@ -149,6 +251,14 @@ class Class(Base, TimestampMixin):
             conditions.append(cls.max_age >= min_age)
         if max_age is not None:
             conditions.append(cls.min_age <= max_age)
+        if search:
+            search_pattern = f"%{search}%"
+            conditions.append(
+                or_(
+                    cls.name.ilike(search_pattern),
+                    cls.description.ilike(search_pattern)
+                )
+            )
 
         # Get total count
         count_result = await db_session.execute(
@@ -159,6 +269,7 @@ class Class(Base, TimestampMixin):
         # Get paginated results
         result = await db_session.execute(
             select(cls)
+            .options(selectinload(cls.school))
             .where(and_(*conditions))
             .order_by(cls.start_date, cls.start_time)
             .offset(skip)
