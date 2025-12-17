@@ -52,7 +52,7 @@ class Attendance(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     )
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     status: Mapped[AttendanceStatus] = mapped_column(
-        Enum(AttendanceStatus), nullable=False
+        Enum(AttendanceStatus, native_enum=False), nullable=False
     )
     marked_by: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=False, index=True
@@ -169,12 +169,12 @@ class Attendance(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
 
     @classmethod
     async def get_by_class(
-        cls, db_session: AsyncSession, class_id: str, date: Optional[date] = None
+        cls, db_session: AsyncSession, class_id: str, attendance_date: Optional[date] = None
     ) -> Sequence["Attendance"]:
         """Get all attendance for a class, optionally filtered by date."""
         conditions = [cls.class_id == class_id]
-        if date:
-            conditions.append(cls.date == date)
+        if attendance_date:
+            conditions.append(cls.date == attendance_date)
 
         stmt = (
             select(cls)
