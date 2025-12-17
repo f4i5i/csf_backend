@@ -237,6 +237,7 @@ class TestGetChildAttendanceStats:
             last_name="User",
             date_of_birth=date.today() - timedelta(days=365 * 8),
             jersey_size=JerseySize.M,
+            organization_id=other_user.organization_id,
         )
 
         response = await client.get(

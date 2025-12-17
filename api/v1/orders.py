@@ -225,11 +225,22 @@ async def create_order(
         discount_total=calculation.discount_total,
         total=calculation.total,
         notes=data.notes,
+        organization_id=current_user.organization_id,
     )
     db_session.add(order)
 
+    # Fetch all classes to get Stripe Price IDs
+    class_ids = [li.class_id for li in calculation.line_items]
+    result = await db_session.execute(
+        select(Class).where(Class.id.in_(class_ids))
+    )
+    classes_dict = {c.id: c for c in result.scalars().all()}
+
     # Create enrollments and line items
     for li in calculation.line_items:
+        # Get the class for this line item
+        class_obj = classes_dict.get(li.class_id)
+
         # Create enrollment
         enrollment = Enrollment(
             id=str(uuid4()),
@@ -240,6 +251,7 @@ async def create_order(
             base_price=li.unit_price,
             discount_amount=li.sibling_discount + li.promo_discount + li.scholarship_discount,
             final_price=li.line_total,
+            organization_id=current_user.organization_id,
         )
         db_session.add(enrollment)
 
@@ -252,7 +264,7 @@ async def create_order(
         if li.promo_discount_description:
             discount_desc_parts.append(li.promo_discount_description)
 
-        # Create line item
+        # Create line item with Stripe Price ID
         line_item = OrderLineItem(
             id=str(uuid4()),
             order_id=order.id,
@@ -260,6 +272,7 @@ async def create_order(
             description=f"{li.child_name} - {li.class_name}",
             quantity=1,
             unit_price=li.unit_price,
+            stripe_price_id=class_obj.get_stripe_price_id() if class_obj else None,
             discount_code_id=calculation.discount_code_id,
             discount_amount=li.sibling_discount + li.promo_discount + li.scholarship_discount,
             discount_description="; ".join(discount_desc_parts) if discount_desc_parts else None,
@@ -359,20 +372,31 @@ async def get_order(
 @router.post("/{order_id}/pay", response_model=PaymentIntentResponse)
 async def create_payment_for_order(
     order_id: str,
-    payment_method_id: str = None,
+    payment_data: dict = {},
     current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> PaymentIntentResponse:
     """
-    Create payment intent for an order.
+    Create Stripe Checkout Session for an order using Price IDs from line items.
 
-    If payment_method_id provided, attempts to charge immediately.
-    Otherwise returns client_secret for frontend to complete payment.
+    Returns checkout session URL for frontend redirection.
+    All Stripe operations are handled on backend as single source of truth.
+
+    Accepts optional success_url and cancel_url in request body to support
+    dynamic redirects for different environments (localhost, staging, production).
     """
     logger.info(f"Create payment for order {order_id} by user: {current_user.id}")
 
+    # Extract parameters from request body
+    payment_method_id = payment_data.get("payment_method_id")
+    success_url = payment_data.get("success_url")
+    cancel_url = payment_data.get("cancel_url")
+
+    # Load order with line items
     result = await db_session.execute(
-        select(Order).where(Order.id == order_id)
+        select(Order)
+        .options(selectinload(Order.line_items))
+        .where(Order.id == order_id)
     )
     order = result.scalar_one_or_none()
 
@@ -392,31 +416,56 @@ async def create_payment_for_order(
         user_id=current_user.id,
     )
 
-    # Create payment intent
-    amount_cents = StripeService.dollars_to_cents(order.total)
+    # Build line items for Stripe Checkout from order line items
+    import stripe
+    stripe_line_items = []
 
-    payment_intent = await stripe_service.create_payment_intent(
-        amount=amount_cents,
+    for line_item in order.line_items:
+        if line_item.stripe_price_id:
+            # Use existing Stripe Price ID from class
+            stripe_line_items.append({
+                "price": line_item.stripe_price_id,
+                "quantity": line_item.quantity,
+            })
+        else:
+            # Fallback: Create price on-the-fly for items without Price ID
+            # This handles one-time classes or legacy items
+            amount_cents = StripeService.dollars_to_cents(line_item.line_total)
+            stripe_line_items.append({
+                "price_data": {
+                    "currency": "usd",
+                    "unit_amount": amount_cents,
+                    "product_data": {
+                        "name": line_item.description,
+                    },
+                },
+                "quantity": 1,
+            })
+
+    # Create Stripe Checkout Session
+    checkout_session = await stripe_service.create_checkout_session(
         customer_id=customer_id,
-        payment_method_id=payment_method_id,
+        line_items=stripe_line_items,
         metadata={
             "order_id": order.id,
             "user_id": current_user.id,
         },
-        description=f"Order {order.id}",
+        success_url=success_url,
+        cancel_url=cancel_url,
     )
 
-    # Update order
+    # Update order with checkout session info
     order.status = OrderStatus.PENDING_PAYMENT
-    order.stripe_payment_intent_id = payment_intent["id"]
+    order.stripe_payment_intent_id = checkout_session.get("payment_intent")
     order.stripe_customer_id = customer_id
     await db_session.commit()
 
+    # Return checkout session URL for frontend to redirect
     return PaymentIntentResponse(
-        id=payment_intent["id"],
-        client_secret=payment_intent["client_secret"],
-        status=payment_intent["status"],
-        amount=payment_intent["amount"],
+        id=checkout_session["id"],
+        client_secret=checkout_session["url"],  # Using client_secret field for checkout URL
+        status="requires_action",  # Frontend needs to redirect
+        amount=StripeService.dollars_to_cents(order.total),
     )
 
 

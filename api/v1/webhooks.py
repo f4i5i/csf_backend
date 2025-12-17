@@ -63,7 +63,10 @@ async def stripe_webhook(
     logger.info(f"Received Stripe webhook: {event_type}")
 
     # Handle different event types
-    if event_type == "payment_intent.succeeded":
+    if event_type == "checkout.session.completed":
+        await handle_checkout_session_completed(event["data"]["object"], db_session)
+
+    elif event_type == "payment_intent.succeeded":
         await handle_payment_succeeded(event["data"]["object"], db_session)
 
     elif event_type == "payment_intent.payment_failed":
@@ -88,6 +91,35 @@ async def stripe_webhook(
         await handle_invoice_upcoming(event["data"]["object"], db_session)
 
     return {"status": "success"}
+
+
+async def handle_checkout_session_completed(
+    session: dict,
+    db_session: AsyncSession,
+) -> None:
+    """
+    Handle completed Stripe Checkout Session.
+
+    Extracts payment intent from session and delegates to payment handler.
+    """
+    session_id = session["id"]
+    payment_intent_id = session.get("payment_intent")
+
+    logger.info(f"Processing checkout session completed: {session_id}, payment_intent: {payment_intent_id}")
+
+    if not payment_intent_id:
+        logger.warning(f"No payment intent in checkout session: {session_id}")
+        return
+
+    # Retrieve the full payment intent object
+    import stripe
+    try:
+        payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        # Delegate to existing payment succeeded handler
+        await handle_payment_succeeded(payment_intent, db_session)
+    except Exception as e:
+        logger.error(f"Failed to retrieve payment intent {payment_intent_id}: {e}")
+        raise
 
 
 async def handle_payment_succeeded(

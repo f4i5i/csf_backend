@@ -2,6 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from api.deps import get_current_admin, get_current_user
 from app.models.user import User
@@ -51,6 +52,7 @@ async def create_waiver_template(
         is_required=data.is_required,
         applies_to_program_id=data.applies_to_program_id,
         applies_to_school_id=data.applies_to_school_id,
+        organization_id=current_user.organization_id,
     )
 
     logger.info(f"Waiver template created: {template.id}, version: {template.version}")
@@ -67,7 +69,11 @@ async def list_waiver_templates(
     List all waiver templates (admin only).
     """
     logger.info(f"List waiver templates by admin: {current_user.id}")
-    templates = await WaiverTemplate.get_all(db_session, include_inactive=include_inactive)
+    templates = await WaiverTemplate.get_all(
+        db_session,
+        organization_id=current_user.organization_id,
+        include_inactive=include_inactive,
+    )
     return WaiverTemplateListResponse(
         items=[WaiverTemplateResponse.model_validate(t) for t in templates],
         total=len(templates),
@@ -164,7 +170,10 @@ async def get_required_waivers(
     logger.info(f"Get required waivers for user: {current_user.id}")
 
     templates = await WaiverTemplate.get_active_waivers(
-        db_session, program_id=program_id, school_id=school_id
+        db_session,
+        organization_id=current_user.organization_id,
+        program_id=program_id,
+        school_id=school_id,
     )
 
     items = []
@@ -216,7 +225,10 @@ async def get_pending_waivers(
 
     # Get all required waivers for context
     templates = await WaiverTemplate.get_active_waivers(
-        db_session, program_id=program_id, school_id=school_id
+        db_session,
+        organization_id=current_user.organization_id,
+        program_id=program_id,
+        school_id=school_id,
     )
 
     pending_items = []
@@ -292,6 +304,7 @@ async def accept_waiver(
         signer_name=data.signer_name,
         signer_ip=client_ip,
         signer_user_agent=user_agent,
+        organization_id=current_user.organization_id,
     )
 
     logger.info(f"Waiver accepted: {acceptance.id}")
@@ -335,3 +348,44 @@ async def get_acceptance(
             raise NotFoundException(message="Waiver acceptance not found")
 
     return WaiverAcceptanceResponse.model_validate(acceptance)
+
+
+# ============== Admin Reporting Endpoints ==============
+
+
+@router.get("/admin/acceptances", response_model=WaiverAcceptanceListResponse)
+async def get_all_acceptances(
+    template_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    current_user: User = Depends(get_current_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> WaiverAcceptanceListResponse:
+    """
+    Get all waiver acceptances for reporting (admin only).
+
+    Supports filtering by template_id and user_id.
+    """
+    logger.info(f"Get all waiver acceptances by admin: {current_user.id}")
+
+    from sqlalchemy import select
+
+    query = select(WaiverAcceptance).options(
+        selectinload(WaiverAcceptance.waiver_template),
+        selectinload(WaiverAcceptance.user)
+    )
+
+    if template_id:
+        query = query.where(WaiverAcceptance.waiver_template_id == template_id)
+
+    if user_id:
+        query = query.where(WaiverAcceptance.user_id == user_id)
+
+    query = query.order_by(WaiverAcceptance.accepted_at.desc())
+
+    result = await db_session.execute(query)
+    acceptances = result.scalars().all()
+
+    return WaiverAcceptanceListResponse(
+        items=[WaiverAcceptanceResponse.model_validate(a) for a in acceptances],
+        total=len(acceptances),
+    )

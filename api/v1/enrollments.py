@@ -263,6 +263,10 @@ async def cancel_enrollment(
     class_result = await db_session.execute(select(Class).where(Class.id == enrollment.class_id))
     class_ = class_result.scalar_one_or_none()
 
+    # Decrement class enrollment count
+    if class_:
+        await class_.decrement_enrollment(db_session)
+
     await db_session.commit()
 
     # Send cancellation confirmation email

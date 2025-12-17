@@ -260,6 +260,7 @@ async def test_child(db_session: AsyncSession, test_user: User) -> dict:
         last_name="User",
         date_of_birth=date.today() - timedelta(days=365 * 8),  # 8 years old
         jersey_size=JerseySize.M,
+        organization_id=test_user.organization_id,
     )
     return {
         "id": child.id,
@@ -281,6 +282,7 @@ async def test_order(db_session: AsyncSession, test_user: User, test_child: dict
         subtotal=Decimal(test_class["price"]),
         discount_total=Decimal("0.00"),
         total=Decimal(test_class["price"]),
+        organization_id=test_user.organization_id,
     )
     return {
         "id": order.id,

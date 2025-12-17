@@ -53,7 +53,7 @@ class Order(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
 
     # Status
     status: Mapped[OrderStatus] = mapped_column(
-        Enum(OrderStatus), default=OrderStatus.DRAFT, nullable=False
+        Enum(OrderStatus, native_enum=False), default=OrderStatus.DRAFT, nullable=False
     )
 
     # Pricing
@@ -176,6 +176,11 @@ class OrderLineItem(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(
         Numeric(10, 2), nullable=False, default=Decimal("0.00")
+    )
+
+    # Stripe integration
+    stripe_price_id: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, index=True
     )
 
     # Discount

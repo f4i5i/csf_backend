@@ -73,9 +73,9 @@ class Child(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
 
     # Size and grade
     jersey_size: Mapped[Optional[JerseySize]] = mapped_column(
-        Enum(JerseySize), nullable=True
+        Enum(JerseySize, native_enum=False), nullable=True
     )
-    grade: Mapped[Optional[Grade]] = mapped_column(Enum(Grade), nullable=True)
+    grade: Mapped[Optional[Grade]] = mapped_column(Enum(Grade, native_enum=False), nullable=True)
 
     # Medical info (encrypted)
     medical_conditions_encrypted: Mapped[Optional[str]] = mapped_column(
@@ -103,7 +103,7 @@ class Child(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
 
     # Marketing
     how_heard_about_us: Mapped[Optional[HowHeardAboutUs]] = mapped_column(
-        Enum(HowHeardAboutUs), nullable=True
+        Enum(HowHeardAboutUs, native_enum=False), nullable=True
     )
     how_heard_other_text: Mapped[Optional[str]] = mapped_column(
         String(200), nullable=True

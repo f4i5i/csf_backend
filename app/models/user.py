@@ -42,7 +42,7 @@ class User(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     role: Mapped[Role] = mapped_column(
-        Enum(Role, native_enum=True, values_callable=lambda x: [e.value for e in x]),
+        Enum(Role, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         default=Role.PARENT,
         nullable=False
     )
@@ -68,6 +68,8 @@ class User(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     organization: Mapped["Organization"] = relationship(
         "Organization", back_populates="users"
     )
+    classes_coached: Mapped[List["Class"]] = relationship(
+        "Class", back_populates="coach")
 
     __table_args__ = (
         Index(

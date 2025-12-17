@@ -42,7 +42,7 @@ class WaiverTemplate(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    waiver_type: Mapped[WaiverType] = mapped_column(Enum(WaiverType), nullable=False)
+    waiver_type: Mapped[WaiverType] = mapped_column(Enum(WaiverType, native_enum=False), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)  # HTML content
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
@@ -80,6 +80,7 @@ class WaiverTemplate(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     async def get_active_waivers(
         cls,
         db_session: AsyncSession,
+        organization_id: Optional[str] = None,
         program_id: Optional[str] = None,
         school_id: Optional[str] = None,
     ) -> Sequence["WaiverTemplate"]:
@@ -94,6 +95,10 @@ class WaiverTemplate(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         )
 
         conditions = [cls.is_active == True, cls.is_required == True]
+
+        # Filter by organization
+        if organization_id:
+            conditions.append(cls.organization_id == organization_id)
 
         if program_id and school_id:
             # Get global + program-specific + school-specific waivers
@@ -121,10 +126,15 @@ class WaiverTemplate(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
 
     @classmethod
     async def get_all(
-        cls, db_session: AsyncSession, include_inactive: bool = False
+        cls,
+        db_session: AsyncSession,
+        organization_id: Optional[str] = None,
+        include_inactive: bool = False,
     ) -> Sequence["WaiverTemplate"]:
-        """Get all waiver templates."""
+        """Get all waiver templates for an organization."""
         conditions = []
+        if organization_id:
+            conditions.append(cls.organization_id == organization_id)
         if not include_inactive:
             conditions.append(cls.is_active == True)
 

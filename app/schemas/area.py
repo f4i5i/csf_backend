@@ -11,7 +11,6 @@ class AreaCreate(BaseSchema):
 
     name: str
     description: Optional[str] = None
-    is_active: Optional[bool] = True
 
 
 class AreaUpdate(BaseSchema):

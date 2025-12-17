@@ -28,7 +28,31 @@ CSF Backend Architecture
 ```
 
 **Tech Stack**: FastAPI + SQLAlchemy 2.0 + Pydantic V2 + Celery + Redis + Stripe
-**Language**: Python 3.12 | **Package Manager**: uv | **Database**: PostgreSQL 15 + Alembic
+**Language**: Python 3.12 | **Package Manager**: uv | **Database**: PostgreSQL 15 / SQLite + Alembic
+
+---
+
+## Database Configuration
+
+The application supports **both PostgreSQL and SQLite** databases, configured via the `DATABASE_URL` environment variable:
+
+### PostgreSQL (Recommended for Local Development)
+```bash
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/csf_db
+```
+- Full-featured RDBMS with native ENUM support
+- Connection pooling and advanced query optimization
+- Best for production-scale deployments
+
+### SQLite (For Testing & Simple Deployments)
+```bash
+DATABASE_URL=sqlite+aiosqlite:///./csf.db
+```
+- Single-file database, easy to deploy
+- Suitable for PythonAnywhere and low-traffic deployments
+- No separate database server required
+
+**Note**: All models and migrations are database-agnostic. The application automatically adjusts connection settings based on the database type detected in the URL.
 
 ---
 

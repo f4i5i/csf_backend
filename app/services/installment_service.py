@@ -48,7 +48,7 @@ class InstallmentService:
         Args:
             user: Current user
             order_id: Order to create installment plan for
-            num_installments: Number of installments (2-12)
+            num_installments: Number of installments (2-6)
             frequency: Payment frequency (weekly, biweekly, monthly)
             payment_method_id: Stripe payment method ID
             start_date: First installment date (default: today)
@@ -75,11 +75,11 @@ class InstallmentService:
                 f"Cannot create installment plan for {order.status} order"
             )
 
-        # Validate installment count (maximum 2 allowed)
-        if num_installments < 1:
-            raise BadRequestException("At least 1 installment is required")
-        if num_installments > 2:
-            raise BadRequestException("Maximum 2 installments allowed")
+        # Validate installment count (2-6 installments allowed)
+        if num_installments < 2:
+            raise BadRequestException("At least 2 installments required")
+        if num_installments > 6:
+            raise BadRequestException("Maximum 6 installments allowed")
 
         # Validate minimum amount per installment ($10)
         min_installment = Decimal("10.00")

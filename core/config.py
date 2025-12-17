@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from typing import List
 
@@ -70,7 +71,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # CORS
-    CORS_ALLOWED_ORIGINS: List[str] = ["https://csf-app.vercel.app", "http://localhost:3000", "http://localhost:3001"]
+    CORS_ALLOWED_ORIGINS: List[str] = os.getenv("CORS_ALLOWED_ORIGINS", ["https://csf-app.vercel.app", "http://localhost:3000", "http://localhost:3001"])
 
     # Encryption
     ENCRYPTION_KEY: str = ""

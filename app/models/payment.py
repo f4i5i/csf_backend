@@ -73,10 +73,10 @@ class Payment(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
 
     # Payment details
     payment_type: Mapped[PaymentType] = mapped_column(
-        Enum(PaymentType), nullable=False
+        Enum(PaymentType, native_enum=False), nullable=False
     )
     status: Mapped[PaymentStatus] = mapped_column(
-        Enum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False
+        Enum(PaymentStatus, native_enum=False), default=PaymentStatus.PENDING, nullable=False
     )
     amount: Mapped[Decimal] = mapped_column(
         Numeric(10, 2), nullable=False
@@ -107,7 +107,7 @@ class Payment(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
 
     # Refund approval workflow
     refund_status: Mapped[RefundStatus] = mapped_column(
-        Enum(RefundStatus), default=RefundStatus.NOT_REQUESTED, nullable=False, index=True
+        Enum(RefundStatus, native_enum=False), default=RefundStatus.NOT_REQUESTED, nullable=False, index=True
     )
     refund_requested_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -366,7 +366,7 @@ class InstallmentPlan(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         Numeric(10, 2), nullable=False
     )
     frequency: Mapped[InstallmentFrequency] = mapped_column(
-        Enum(InstallmentFrequency), nullable=False
+        Enum(InstallmentFrequency, native_enum=False), nullable=False
     )
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
 
@@ -377,7 +377,7 @@ class InstallmentPlan(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
 
     # Status
     status: Mapped[InstallmentPlanStatus] = mapped_column(
-        Enum(InstallmentPlanStatus), default=InstallmentPlanStatus.ACTIVE, nullable=False
+        Enum(InstallmentPlanStatus, native_enum=False), default=InstallmentPlanStatus.ACTIVE, nullable=False
     )
 
     # Relationships
@@ -466,7 +466,7 @@ class InstallmentPayment(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixi
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     status: Mapped[InstallmentPaymentStatus] = mapped_column(
-        Enum(InstallmentPaymentStatus),
+        Enum(InstallmentPaymentStatus, native_enum=False),
         default=InstallmentPaymentStatus.PENDING,
         nullable=False,
     )

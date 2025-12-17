@@ -346,6 +346,39 @@ class StripeService:
             logger.error(f"Invalid webhook signature: {e}")
             raise
 
+    # ============== Checkout Sessions ==============
+
+    @staticmethod
+    async def create_checkout_session(
+        customer_id: str,
+        line_items: list[dict],  # [{"price": "price_id", "quantity": 1}]
+        metadata: dict = None,
+        success_url: str = None,
+        cancel_url: str = None,
+    ) -> dict:
+        """Create a Checkout Session for complete payment flow."""
+        try:
+            session_params = {
+                "customer": customer_id,
+                "line_items": line_items,
+                "mode": "payment",  # One-time payment
+                "metadata": metadata or {},
+                "success_url": success_url or f"{settings.FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
+                "cancel_url": cancel_url or f"{settings.FRONTEND_URL}/payment/cancel",
+            }
+
+            session = stripe.checkout.Session.create(**session_params)
+            logger.info(f"Created Checkout Session: {session.id}")
+
+            return {
+                "id": session.id,
+                "url": session.url,
+                "payment_intent": session.payment_intent,
+            }
+        except stripe.error.StripeError as e:
+            logger.error(f"Failed to create Checkout Session: {e}")
+            raise
+
     # ============== Utilities ==============
 
     @staticmethod

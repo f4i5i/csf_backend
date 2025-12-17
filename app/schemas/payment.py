@@ -44,6 +44,8 @@ class PaymentIntentCreate(BaseSchema):
 
     order_id: str
     payment_method_id: Optional[str] = None
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
 
 
 class PaymentIntentResponse(BaseSchema):
@@ -65,6 +67,19 @@ class PaymentIntentConfirm(BaseSchema):
 # ============== Payment Record Schemas ==============
 
 
+class InstallmentPlanSummary(BaseSchema):
+    """Summary of installment plan details."""
+
+    id: str
+    num_installments: int
+    installment_number: int  # Current installment being paid
+    paid_count: int  # Number of paid installments
+    total_amount: Decimal
+    remaining_amount: Decimal
+    next_due_date: Optional[date] = None
+    status: str
+
+
 class PaymentResponse(BaseSchema):
     """Payment transaction response."""
 
@@ -82,6 +97,7 @@ class PaymentResponse(BaseSchema):
     paid_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    installment_plan: Optional[InstallmentPlanSummary] = None
 
 
 class PaymentListResponse(BaseSchema):

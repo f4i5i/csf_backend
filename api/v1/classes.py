@@ -28,6 +28,7 @@ async def list_classes(
     search: Optional[str] = Query(None, description="Search in class name and description"),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
+    sync_counts: bool = Query(True, description="Sync enrollment counts with actual data"),
     db_session: AsyncSession = Depends(get_db),
 ) -> ClassListResponse:
     """
@@ -35,8 +36,9 @@ async def list_classes(
 
     Public endpoint - no authentication required.
     Supports search by class name or description.
+    By default, syncs enrollment counts for accurate capacity display.
     """
-    logger.info(f"List classes request - skip: {skip}, limit: {limit}, search: {search}")
+    logger.info(f"List classes request - skip: {skip}, limit: {limit}, search: {search}, sync_counts: {sync_counts}")
     classes, total = await Class.get_filtered(
         db_session,
         program_id=program_id,
@@ -49,6 +51,12 @@ async def list_classes(
         skip=skip,
         limit=limit,
     )
+
+    # Sync enrollment counts for accurate capacity display
+    if sync_counts:
+        for class_obj in classes:
+            await class_obj.sync_enrollment_count(db_session)
+
     logger.info(f"Found {total} classes")
     return ClassListResponse(
         items=[ClassResponse.model_validate(c) for c in classes],
@@ -73,6 +81,9 @@ async def get_class(
     if not class_obj:
         logger.warning(f"Class not found: {class_id}")
         raise NotFoundException(message="Class not found")
+
+    # Sync enrollment count with actual active enrollments
+    await class_obj.sync_enrollment_count(db_session)
 
     logger.info(
         f"Returning class {class_id} - capacity: {class_obj.capacity}, "
@@ -100,27 +111,45 @@ async def create_class(
     # Convert weekdays to list of strings (optional for membership classes)
     weekdays = [w.value for w in data.weekdays] if data.weekdays else []
 
+    # Convert payment_options to dict format for storage (JSON-serializable)
+    payment_options_dict = None
+    if data.payment_options:
+        payment_options_dict = [
+            {**opt.model_dump(), 'amount': float(opt.amount)}
+            for opt in data.payment_options
+        ]
+
     class_obj = await Class.create_class(
         db_session,
         name=data.name,
         description=data.description,
         ledger_code=data.ledger_code,
+        school_code=data.school_code,
         image_url=data.image_url,
+        website_link=data.website_link,
         program_id=data.program_id,
+        area_id=data.area_id,
         school_id=data.school_id,
+        coach_id=data.coach_id,
         class_type=data.class_type,
         weekdays=weekdays,
         start_time=data.start_time,
         end_time=data.end_time,
         start_date=data.start_date,
         end_date=data.end_date,
+        registration_start_date=data.registration_start_date,
+        registration_end_date=data.registration_end_date,
+        recurrence_pattern=data.recurrence_pattern,
+        repeat_every_weeks=data.repeat_every_weeks,
         capacity=data.capacity,
         waitlist_enabled=data.waitlist_enabled,
         price=data.price,
         membership_price=data.membership_price,
         installments_enabled=data.installments_enabled,
+        payment_options=payment_options_dict,
         min_age=data.min_age,
         max_age=data.max_age,
+        organization_id=current_user.organization_id,
     )
     logger.info(f"Class created successfully: {class_obj.id}")
     logger.info(
@@ -153,8 +182,8 @@ async def create_class(
                 message=f"Class created but failed to create Stripe prices: {str(e)}"
             )
 
-    # Eagerly load school relationship before validation to avoid lazy loading issues
-    await db_session.refresh(class_obj, attribute_names=['school'])
+    # Eagerly load school and coach relationships before validation to avoid lazy loading issues
+    await db_session.refresh(class_obj, attribute_names=['school', 'coach'])
 
     return ClassResponse.model_validate(class_obj)
 
@@ -210,11 +239,20 @@ async def update_class(
     for field, value in update_data.items():
         setattr(class_obj, field, value)
 
+    # Save payment_options to database if provided (convert Decimal to float for JSON)
+    if payment_options is not None:
+        # Convert Decimal amounts to float for JSON serialization
+        serializable_options = [
+            {**opt, 'amount': float(opt['amount']) if 'amount' in opt else opt.get('amount')}
+            for opt in payment_options
+        ]
+        class_obj.payment_options = serializable_options
+
     await db_session.commit()
     await db_session.refresh(class_obj)
     logger.info(f"Class updated successfully: {class_id}")
 
-    # Process payment_options if provided
+    # Process payment_options for Stripe if provided
     if payment_options and auto_create_stripe_prices:
         try:
             logger.info(
@@ -260,3 +298,82 @@ async def delete_class(
     await db_session.commit()
     logger.info(f"Class deleted successfully: {class_id}")
     return {"message": "Class deleted successfully"}
+
+
+@router.post("/{class_id}/sync-enrollment")
+async def sync_class_enrollment(
+    class_id: str,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+) -> dict:
+    """
+    Sync enrollment count for a specific class.
+
+    Recalculates current_enrollment based on actual ACTIVE enrollments.
+    Requires admin or owner role.
+    """
+    logger.info(f"Sync enrollment count for class: {class_id}")
+    class_obj = await Class.get_by_id(db_session, class_id)
+    if not class_obj:
+        raise NotFoundException(message="Class not found")
+
+    old_count = class_obj.current_enrollment
+    new_count = await class_obj.sync_enrollment_count(db_session)
+
+    logger.info(
+        f"Synced enrollment for class {class_id}: {old_count} -> {new_count}"
+    )
+    return {
+        "message": "Enrollment count synced successfully",
+        "class_id": class_id,
+        "old_count": old_count,
+        "new_count": new_count,
+        "capacity": class_obj.capacity,
+        "has_capacity": class_obj.has_capacity,
+    }
+
+
+@router.post("/sync-all-enrollments")
+async def sync_all_enrollments(
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+) -> dict:
+    """
+    Sync enrollment counts for all classes.
+
+    Recalculates current_enrollment for all active classes.
+    Requires admin or owner role.
+    """
+    from sqlalchemy import select
+
+    logger.info(f"Sync all enrollment counts by admin: {current_user.id}")
+
+    # Get all active classes
+    result = await db_session.execute(
+        select(Class).where(Class.is_active == True)
+    )
+    classes = result.scalars().all()
+
+    synced_count = 0
+    updated_classes = []
+
+    for class_obj in classes:
+        old_count = class_obj.current_enrollment
+        new_count = await class_obj.sync_enrollment_count(db_session)
+
+        if old_count != new_count:
+            synced_count += 1
+            updated_classes.append({
+                "class_id": class_obj.id,
+                "class_name": class_obj.name,
+                "old_count": old_count,
+                "new_count": new_count,
+            })
+
+    logger.info(f"Synced {synced_count} classes with mismatched enrollment counts")
+    return {
+        "message": "All enrollment counts synced successfully",
+        "total_classes": len(classes),
+        "updated_count": synced_count,
+        "updated_classes": updated_classes[:20],  # Limit to first 20 for response size
+    }

@@ -30,7 +30,7 @@ class TestOrderCalculation:
         assert data["sibling_discount_total"] == "0.00"
 
     async def test_calculate_sibling_discount(
-        self, client: AsyncClient, auth_headers: dict, test_class: dict, db_session
+        self, client: AsyncClient, auth_headers: dict, test_class: dict, db_session, test_user
     ):
         """Test sibling discount calculation for multiple children."""
         from app.models.child import Child, JerseySize
@@ -43,6 +43,7 @@ class TestOrderCalculation:
             last_name="Test",
             date_of_birth=date.today() - timedelta(days=365 * 8),
             jersey_size=JerseySize.M,
+            organization_id=test_user.organization_id,
         )
         child2 = await Child.create_child(
             db_session,
@@ -51,6 +52,7 @@ class TestOrderCalculation:
             last_name="Test",
             date_of_birth=date.today() - timedelta(days=365 * 6),
             jersey_size=JerseySize.S,
+            organization_id=test_user.organization_id,
         )
 
         response = await client.post(

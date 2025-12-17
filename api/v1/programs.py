@@ -84,9 +84,15 @@ async def create_program(
     program = await Program.create_program(
         db_session,
         name=data.name,
+        organization_id=current_admin.organization_id,
         description=data.description,
-        is_active=data.is_active if data.is_active is not None else True,
     )
+
+    # Set is_active if provided
+    if hasattr(data, 'is_active') and data.is_active is not None:
+        program.is_active = data.is_active
+        await db_session.commit()
+        await db_session.refresh(program)
 
     return ProgramResponse(
         id=program.id,

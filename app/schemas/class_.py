@@ -1,11 +1,16 @@
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator, computed_field
+from sqlalchemy.orm import object_session
+from sqlalchemy.inspection import inspect as sqlalchemy_inspect
 
 from app.models.class_ import ClassType, Weekday
 from app.schemas.base import BaseSchema
+
+if TYPE_CHECKING:
+    from app.schemas.school import SchoolResponse
 
 
 class PaymentOption(BaseSchema):
@@ -210,7 +215,12 @@ class ClassResponse(BaseSchema):
     area_id: Optional[str]
     school_id: Optional[str]
     school_name: Optional[str]
+    school_address: Optional[str] = None
+    school_city: Optional[str] = None
+    school_state: Optional[str] = None
+    school_zip_code: Optional[str] = None
     coach_id: Optional[str]
+    coach: Optional[Dict[str, Any]] = None
     class_type: ClassType
 
     # Schedule
@@ -240,6 +250,9 @@ class ClassResponse(BaseSchema):
     membership_price: Optional[Decimal]
     installments_enabled: bool
 
+    # Payment Options
+    payment_options: Optional[List[dict]] = None
+
     # Age requirements
     min_age: int
     max_age: int
@@ -250,14 +263,57 @@ class ClassResponse(BaseSchema):
 
     @model_validator(mode='before')
     @classmethod
-    def extract_school_name(cls, data: Any) -> Any:
-        """Extract school name from school relationship if available."""
-        if not isinstance(data, dict):
-            # If it's a SQLAlchemy model instance, temporarily add school_name as attribute
-            if hasattr(data, 'school'):
-                school_name = data.school.name if data.school else None
-                # Add as a temporary attribute for Pydantic to read
-                object.__setattr__(data, 'school_name', school_name)
+    def extract_school_info(cls, data: Any) -> Any:
+        """Extract school information from school relationship if available."""
+        if isinstance(data, dict):
+            # If data is already a dict, return as is
+            return data
+
+        # If it's a SQLAlchemy model instance, extract school fields
+        if hasattr(data, 'school') and data.school:
+            try:
+                # Extract individual school fields
+                object.__setattr__(data, 'school_name', getattr(data.school, 'name', None))
+                object.__setattr__(data, 'school_address', getattr(data.school, 'address', None))
+                object.__setattr__(data, 'school_city', getattr(data.school, 'city', None))
+                object.__setattr__(data, 'school_state', getattr(data.school, 'state', None))
+                object.__setattr__(data, 'school_zip_code', getattr(data.school, 'zip_code', None))
+            except AttributeError:
+                # If school attributes are not accessible, set to None
+                object.__setattr__(data, 'school_name', None)
+                object.__setattr__(data, 'school_address', None)
+                object.__setattr__(data, 'school_city', None)
+                object.__setattr__(data, 'school_state', None)
+                object.__setattr__(data, 'school_zip_code', None)
+        elif hasattr(data, 'school'):
+            # School is None
+            object.__setattr__(data, 'school_name', None)
+            object.__setattr__(data, 'school_address', None)
+            object.__setattr__(data, 'school_city', None)
+            object.__setattr__(data, 'school_state', None)
+            object.__setattr__(data, 'school_zip_code', None)
+
+        # Extract coach information from coach relationship if available
+        if hasattr(data, 'coach'):
+            try:
+                # Access coach directly (should be loaded via selectinload)
+                coach_obj = data.coach
+                if coach_obj is not None:
+                    # Create a simple dict with coach info
+                    coach_dict = {
+                        'id': coach_obj.id,
+                        'first_name': coach_obj.first_name,
+                        'last_name': coach_obj.last_name,
+                        'email': coach_obj.email,
+                    }
+                    # Override the coach attribute with dict before Pydantic processes it
+                    data.__dict__['coach'] = coach_dict
+                else:
+                    data.__dict__['coach'] = None
+            except (AttributeError, Exception) as e:
+                # If there's any error accessing coach, set to None
+                data.__dict__['coach'] = None
+
         return data
 
 

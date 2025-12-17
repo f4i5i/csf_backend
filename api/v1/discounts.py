@@ -406,3 +406,56 @@ async def list_my_scholarships(
         items=[ScholarshipResponse.model_validate(s) for s in scholarships],
         total=len(scholarships),
     )
+
+
+# ============== Sibling Discount Eligibility ==============
+
+
+@router.get("/sibling-eligibility/{child_id}")
+async def check_sibling_discount_eligibility(
+    child_id: str,
+    current_user: User = Depends(get_current_user),
+    db_session: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Check if a child is eligible for sibling discount.
+
+    Returns the number of siblings with active enrollments and applicable discount percentage.
+    """
+    from app.models.child import Child
+    from app.models.enrollment import Enrollment, EnrollmentStatus
+
+    logger.info(f"Check sibling discount for child {child_id} by user: {current_user.id}")
+
+    # Get all children for this user
+    result = await db_session.execute(
+        select(Child).where(Child.parent_user_id == current_user.id)
+    )
+    all_children = result.scalars().all()
+
+    # Count active enrollments across all children
+    all_child_ids = [c.id for c in all_children]
+    enrollment_result = await db_session.execute(
+        select(Enrollment).where(
+            Enrollment.child_id.in_(all_child_ids), Enrollment.status == EnrollmentStatus.ACTIVE
+        )
+    )
+    active_enrollments = enrollment_result.scalars().all()
+
+    # Determine discount tier based on sibling count
+    # Count how many children have active enrollments (this is the sibling count)
+    sibling_count = len(active_enrollments)
+
+    # Get discount percentage from PricingService
+    discount_percentage = PricingService.SIBLING_DISCOUNTS.get(sibling_count, 0)
+
+    return {
+        "eligible": sibling_count >= 2,
+        "sibling_count": sibling_count,
+        "discount_percentage": discount_percentage,
+        "discount_label": (
+            f"{discount_percentage}% off for {sibling_count}{'nd' if sibling_count == 2 else 'rd' if sibling_count == 3 else 'th'} child"
+            if discount_percentage
+            else None
+        ),
+    }

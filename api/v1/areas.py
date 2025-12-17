@@ -84,9 +84,8 @@ async def create_area(
     area = await Area.create_area(
         db_session,
         name=data.name,
-        description=data.description,
-        is_active=data.is_active if data.is_active is not None else True,
-    )
+        organization_id=current_admin.organization_id,
+        description=data.description)
 
     return AreaResponse(
         id=area.id,

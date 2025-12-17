@@ -98,12 +98,13 @@ async def create_school(
     school = await School.create_school(
         db_session,
         name=data.name,
-        code=data.code,
         address=data.address,
         city=data.city,
         state=data.state,
         zip_code=data.zip_code,
         area_id=data.area_id,
+        organization_id=current_admin.organization_id,
+        code=data.code,
     )
 
     if data.is_active is not None:

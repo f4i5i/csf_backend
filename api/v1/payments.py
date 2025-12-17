@@ -1,5 +1,6 @@
 """Payment API endpoints for managing payment methods and transactions."""
 
+from datetime import date
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -115,26 +116,121 @@ async def detach_payment_method(
 
 @router.get("/my", response_model=PaymentListResponse)
 async def list_my_payments(
+    status: str = None,
+    start_date: date = None,
+    end_date: date = None,
+    skip: int = 0,
+    limit: int = 50,
     current_user: User = Depends(get_current_parent_or_admin),
     db_session: AsyncSession = Depends(get_db),
 ) -> PaymentListResponse:
     """
-    List all payments for the current user.
+    List all payments for the current user with filtering options.
 
-    Returns payment history including status and amounts.
+    Args:
+        status: Filter by payment status (succeeded, pending, failed, etc.)
+        start_date: Filter payments created on or after this date
+        end_date: Filter payments created on or before this date
+        skip: Number of records to skip (for pagination)
+        limit: Maximum number of records to return (default 50)
+
+    Returns payment history including status, amounts, and installment plan details.
     """
-    logger.info(f"List payments for user: {current_user.id}")
+    from app.models.payment import PaymentStatus, PaymentType, InstallmentPlan, InstallmentPayment, InstallmentPaymentStatus
+    from decimal import Decimal
 
-    result = await db_session.execute(
-        select(Payment)
-        .where(Payment.user_id == current_user.id)
-        .order_by(Payment.created_at.desc())
-    )
+    logger.info(f"List payments for user: {current_user.id} with filters: status={status}, start_date={start_date}, end_date={end_date}")
+
+    # Build query with filters
+    query = select(Payment).where(Payment.user_id == current_user.id)
+
+    if status:
+        try:
+            query = query.where(Payment.status == PaymentStatus(status))
+        except ValueError:
+            logger.warning(f"Invalid status filter: {status}")
+
+    if start_date:
+        query = query.where(Payment.created_at >= start_date)
+
+    if end_date:
+        query = query.where(Payment.created_at <= end_date)
+
+    query = query.order_by(Payment.created_at.desc()).offset(skip).limit(limit)
+
+    result = await db_session.execute(query)
     payments = result.scalars().all()
 
+    # Build response items with installment plan details
+    response_items = []
+    for payment in payments:
+        payment_dict = {
+            "id": payment.id,
+            "order_id": payment.order_id,
+            "user_id": payment.user_id,
+            "payment_type": payment.payment_type.value,
+            "status": payment.status.value,
+            "amount": payment.amount,
+            "currency": payment.currency,
+            "stripe_payment_intent_id": payment.stripe_payment_intent_id,
+            "stripe_charge_id": payment.stripe_charge_id,
+            "failure_reason": payment.failure_reason,
+            "refund_amount": payment.refund_amount,
+            "paid_at": payment.paid_at,
+            "created_at": payment.created_at,
+            "updated_at": payment.updated_at,
+            "installment_plan": None,
+        }
+
+        # If this is an installment payment, load plan details
+        if payment.payment_type == PaymentType.INSTALLMENT:
+            # Find the installment payment record for this payment
+            installment_payment_result = await db_session.execute(
+                select(InstallmentPayment)
+                .options(selectinload(InstallmentPayment.installment_plan))
+                .where(InstallmentPayment.payment_id == payment.id)
+            )
+            installment_payment = installment_payment_result.scalar_one_or_none()
+
+            if installment_payment and installment_payment.installment_plan:
+                plan = installment_payment.installment_plan
+
+                # Calculate paid count
+                paid_count = sum(
+                    1 for ip in plan.installment_payments
+                    if ip.status == InstallmentPaymentStatus.PAID
+                )
+
+                # Calculate remaining amount
+                total_paid = sum(
+                    ip.amount for ip in plan.installment_payments
+                    if ip.status == InstallmentPaymentStatus.PAID
+                )
+                remaining_amount = plan.total_amount - total_paid
+
+                # Find next due date
+                next_due_date = None
+                for ip in plan.installment_payments:
+                    if ip.status == InstallmentPaymentStatus.PENDING:
+                        if next_due_date is None or ip.due_date < next_due_date:
+                            next_due_date = ip.due_date
+
+                payment_dict["installment_plan"] = {
+                    "id": plan.id,
+                    "num_installments": plan.num_installments,
+                    "installment_number": installment_payment.installment_number,
+                    "paid_count": paid_count,
+                    "total_amount": plan.total_amount,
+                    "remaining_amount": remaining_amount,
+                    "next_due_date": next_due_date,
+                    "status": plan.status.value,
+                }
+
+        response_items.append(PaymentResponse(**payment_dict))
+
     return PaymentListResponse(
-        items=[PaymentResponse.model_validate(p) for p in payments],
-        total=len(payments),
+        items=response_items,
+        total=len(response_items),
     )
 
 

@@ -55,10 +55,11 @@ class Program(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         cls,
         db_session: AsyncSession,
         name: str,
+        organization_id: str,
         description: Optional[str] = None,
     ) -> "Program":
         """Create a new program."""
-        program = cls(name=name, description=description)
+        program = cls(name=name, description=description, organization_id=organization_id)
         db_session.add(program)
         await db_session.commit()
         await db_session.refresh(program)
@@ -105,10 +106,11 @@ class Area(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         cls,
         db_session: AsyncSession,
         name: str,
+        organization_id: str,
         description: Optional[str] = None,
     ) -> "Area":
         """Create a new area."""
-        area = cls(name=name, description=description)
+        area = cls(name=name, description=description, organization_id=organization_id)
         db_session.add(area)
         await db_session.commit()
         await db_session.refresh(area)
@@ -174,6 +176,7 @@ class School(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         state: str,
         zip_code: str,
         area_id: str,
+        organization_id: str,
         code: Optional[str] = None,
     ) -> "School":
         """Create a new school."""
@@ -185,6 +188,7 @@ class School(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
             state=state,
             zip_code=zip_code,
             area_id=area_id,
+            organization_id=organization_id,
         )
         db_session.add(school)
         await db_session.commit()

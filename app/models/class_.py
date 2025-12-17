@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship, selectinload
 
 from app.models.program import Program, School
+from app.models.user import User
 from core.db import Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin
 
 
@@ -89,10 +90,10 @@ class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         String(36), ForeignKey("schools.id"), nullable=True, index=True
     )
     coach_id: Mapped[Optional[str]] = mapped_column(
-        String(36), nullable=True, index=True
+        String(36), ForeignKey("users.id"), nullable=True, index=True
     )  # Coach/instructor assignment
     class_type: Mapped[ClassType] = mapped_column(
-        Enum(ClassType, name="classtype", values_callable=lambda x: [e.value for e in x]),
+        Enum(ClassType, name="classtype", native_enum=False, values_callable=lambda x: [e.value for e in x]),
         nullable=False
     )
 
@@ -137,7 +138,7 @@ class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
 
     # Billing model (determines payment structure)
     billing_model: Mapped[BillingModel] = mapped_column(
-        Enum(BillingModel), default=BillingModel.ONE_TIME, nullable=False
+        Enum(BillingModel, native_enum=False), default=BillingModel.ONE_TIME, nullable=False
     )
     monthly_price: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(10, 2), nullable=True
@@ -147,6 +148,13 @@ class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     )
     annual_price: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(10, 2), nullable=True
+    )
+
+    # Payment Options (JSON array for flexible payment configurations)
+    # Stores: [{"name": str, "type": str, "amount": float, "interval": str|null, "interval_count": int}]
+    # Example: [{"name": "Full Payment", "type": "one_time", "amount": 299.00, "interval": null, "interval_count": 1}]
+    payment_options: Mapped[Optional[List[dict]]] = mapped_column(
+        JSON, nullable=True
     )
 
     # Stripe Product/Price IDs (for subscription billing)
@@ -172,6 +180,9 @@ class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     # Relationships
     program: Mapped["Program"] = relationship("Program", back_populates="classes")
     school: Mapped[Optional["School"]] = relationship("School", back_populates="classes")
+    coach: Mapped[Optional["User"]] = relationship(
+        "User", back_populates="classes_coached", foreign_keys=[coach_id]
+    )
 
     @property
     def has_capacity(self) -> bool:
@@ -218,7 +229,7 @@ class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     ) -> Optional["Class"]:
         """Get class by ID."""
         result = await db_session.execute(
-            select(cls).options(selectinload(cls.school)).where(cls.id == id)
+            select(cls).options(selectinload(cls.school), selectinload(cls.coach)).where(cls.id == id)
         )
         return result.scalars().first()
 
@@ -269,7 +280,7 @@ class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         # Get paginated results
         result = await db_session.execute(
             select(cls)
-            .options(selectinload(cls.school))
+            .options(selectinload(cls.school), selectinload(cls.coach))
             .where(and_(*conditions))
             .order_by(cls.start_date, cls.start_time)
             .offset(skip)
@@ -317,3 +328,26 @@ class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         if result.rowcount > 0:
             await db_session.commit()
             await db_session.refresh(self)
+
+    async def sync_enrollment_count(self, db_session: AsyncSession) -> int:
+        """Recalculate and sync current_enrollment with actual ACTIVE and PENDING enrollments."""
+        from app.models.enrollment import Enrollment, EnrollmentStatus
+
+        # Count active AND pending enrollments for this class
+        # PENDING enrollments reserve spots during checkout to prevent overbooking
+        count_result = await db_session.execute(
+            select(func.count(Enrollment.id)).where(
+                Enrollment.class_id == self.id,
+                Enrollment.status.in_([EnrollmentStatus.ACTIVE, EnrollmentStatus.PENDING]),
+                Enrollment.is_deleted == False,
+            )
+        )
+        actual_count = count_result.scalar() or 0
+
+        # Update if different
+        if self.current_enrollment != actual_count:
+            self.current_enrollment = actual_count
+            await db_session.commit()
+            await db_session.refresh(self)
+
+        return actual_count
