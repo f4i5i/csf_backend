@@ -2,7 +2,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
 
-from pydantic import Field, field_validator, model_validator, computed_field
+from pydantic import Field, field_validator, model_validator, computed_field, field_serializer
 from sqlalchemy.orm import object_session
 from sqlalchemy.inspection import inspect as sqlalchemy_inspect
 
@@ -225,8 +225,8 @@ class ClassResponse(BaseSchema):
 
     # Schedule
     weekdays: Optional[List[str]]
-    start_time: Optional[time]
-    end_time: Optional[time]
+    start_time: Optional[time]  # Will be serialized as 12-hour format with AM/PM
+    end_time: Optional[time]  # Will be serialized as 12-hour format with AM/PM
     start_date: date
     end_date: date
 
@@ -260,6 +260,44 @@ class ClassResponse(BaseSchema):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer('start_time', 'end_time')
+    def serialize_time_12hr(self, value: Optional[time]) -> Optional[str]:
+        """Convert time to 12-hour format with AM/PM."""
+        if value is None:
+            return None
+
+        hour = value.hour
+        minute = value.minute
+
+        # Determine AM/PM
+        ampm = 'AM' if hour < 12 else 'PM'
+
+        # Convert to 12-hour format
+        hour_12 = hour % 12
+        if hour_12 == 0:
+            hour_12 = 12
+
+        # Format with zero-padded minutes
+        return f"{hour_12}:{minute:02d} {ampm}"
+
+    @field_serializer('weekdays')
+    def serialize_weekdays(self, value: Optional[List[str]]) -> Optional[List[str]]:
+        """Convert weekday names to full capitalized names."""
+        if value is None:
+            return None
+
+        day_mapping = {
+            'monday': 'Monday',
+            'tuesday': 'Tuesday',
+            'wednesday': 'Wednesday',
+            'thursday': 'Thursday',
+            'friday': 'Friday',
+            'saturday': 'Saturday',
+            'sunday': 'Sunday'
+        }
+
+        return [day_mapping.get(day.lower(), day.capitalize()) for day in value]
 
     @model_validator(mode='before')
     @classmethod
