@@ -66,31 +66,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # CORS
-    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001,https://csf-app.vercel.app"
-
-    @property
-    def cors_origins(self) -> List[str]:
-        """
-        Parse CORS origins from comma-separated string.
-        Supports wildcard "*" to allow all origins.
-        """
-        if self.CORS_ALLOWED_ORIGINS == "*":
-            return ["*"]
-        return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
-
-    @property
-    def cors_origin_regex(self) -> str | None:
-        """
-        Return regex pattern for wildcard subdomain support.
-        Example: For yourdomain.com, allows *.yourdomain.com
-        """
-        # Check if any origin contains a wildcard pattern like *.domain.com
-        for origin in self.cors_origins:
-            if "*." in origin:
-                # Extract domain and create regex
-                domain = origin.replace("https://*.", "").replace("http://*.", "")
-                return rf"https://.*\.{domain}"
-        return None
+    CORS_ALLOWED_ORIGINS: str = os.getenv("CORS_ALLOWED_ORIGINS", "*")  # Comma-separated or "*"
 
     # Encryption
     ENCRYPTION_KEY: str = ""
