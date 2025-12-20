@@ -57,11 +57,6 @@ class Settings(BaseSettings):
     SENDGRID_API_KEY: str = ""
     SENDGRID_FROM_EMAIL: str = "noreply@csf.com"
 
-    # Email Marketing - Mailchimp
-    MAILCHIMP_API_KEY: str = ""
-    MAILCHIMP_SERVER_PREFIX: str = "us1"
-    MAILCHIMP_AUDIENCE_ID: str = ""
-
     # SMS - Twilio
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""

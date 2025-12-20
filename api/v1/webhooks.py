@@ -22,7 +22,6 @@ from app.models.payment import (
     PaymentType,
 )
 from app.models.user import User
-from app.services.mailchimp_service import mailchimp_service
 from app.services.stripe_service import StripeService
 from app.tasks.email_tasks import (
     send_enrollment_confirmation_email,
@@ -220,21 +219,6 @@ async def handle_payment_succeeded(
                         class_time=f"{class_.start_time} - {class_.end_time}" if class_.start_time else "TBD",
                     )
 
-                    # Add to Mailchimp with enrollment data
-                    program_result = await db_session.execute(
-                        select(Program).where(Program.id == class_.program_id)
-                    )
-                    program = program_result.scalar_one_or_none()
-                    program_name = program.name if program else "Unknown Program"
-
-                    mailchimp_service.add_enrollment_contact(
-                        email=user.email,
-                        first_name=user.first_name,
-                        last_name=user.last_name,
-                        child_name=child.full_name,
-                        class_name=class_.name,
-                        program_name=program_name,
-                    )
 
     await db_session.commit()
     logger.info(f"Order {order.id} marked as paid, {len(enrollments)} enrollments activated")
@@ -251,14 +235,6 @@ async def handle_payment_succeeded(
             receipt_url=payment_intent.get("receipt_url"),
         )
 
-        # Add payment tags to Mailchimp
-        mailchimp_service.add_payment_contact(
-            email=user.email,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            payment_type="one-time",
-            amount=f"${amount:.2f}",
-        )
 
 
 async def handle_payment_failed(
@@ -406,14 +382,6 @@ async def handle_invoice_paid(
                 receipt_url=invoice.get("hosted_invoice_url"),
             )
 
-            # Add payment tags to Mailchimp
-            mailchimp_service.add_payment_contact(
-                email=user.email,
-                first_name=user.first_name,
-                last_name=user.last_name,
-                payment_type="installment",
-                amount=f"${amount:.2f}",
-            )
 
 
 async def handle_invoice_failed(
