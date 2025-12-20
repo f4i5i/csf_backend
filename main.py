@@ -43,13 +43,18 @@ def create_app() -> FastAPI:
     )
 
     # CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=config.CORS_ALLOWED_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    cors_config = {
+        "allow_origins": config.cors_origins,
+        "allow_credentials": True,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
+
+    # Add regex pattern for wildcard subdomain support (e.g., *.yourdomain.com)
+    if config.cors_origin_regex:
+        cors_config["allow_origin_regex"] = config.cors_origin_regex
+
+    app.add_middleware(CORSMiddleware, **cors_config)
 
     # Custom exception handler
     @app.exception_handler(CustomException)
