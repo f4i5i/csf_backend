@@ -9,7 +9,7 @@ User=root
 Group=root
 WorkingDirectory=/root/csf_backend
 Environment="PATH=/root/csf_backend/.venv/bin"
-Environment="DATABASE_URL=postgresql+asyncpg://csf_user:your_password_here@localhost:5432/csf_db"
+Environment="DATABASE_URL=postgresql+asyncpg://csf_user:CSF_Secure_Pass_2024%21@localhost:5432/csf_db"
 Environment="SECRET_KEY=your-secret-key-min-32-characters-long"
 Environment="CORS_ALLOWED_ORIGINS=*"
 Environment="APP_ENV=production"
