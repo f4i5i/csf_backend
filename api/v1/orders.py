@@ -165,11 +165,12 @@ async def create_order(
     program_ids = list(set([c.program_id for c in classes if c.program_id]))
     school_ids = list(set([c.school_id for c in classes if c.school_id]))
 
-    # Get waivers (global + program-specific + school-specific)
+    # Get waivers (global + program-specific + school-specific) for this organization
     result = await db_session.execute(
         select(WaiverTemplate).where(
             and_(
                 WaiverTemplate.is_active == True,
+                WaiverTemplate.organization_id == current_user.organization_id,
                 or_(
                     and_(
                         WaiverTemplate.applies_to_program_id.is_(None),
@@ -187,7 +188,10 @@ async def create_order(
     if required_waivers:
         result = await db_session.execute(
             select(WaiverAcceptance).where(
-                WaiverAcceptance.user_id == current_user.id
+                and_(
+                    WaiverAcceptance.user_id == current_user.id,
+                    WaiverAcceptance.organization_id == current_user.organization_id
+                )
             )
         )
         user_acceptances = result.scalars().all()
@@ -277,6 +281,7 @@ async def create_order(
             discount_amount=li.sibling_discount + li.promo_discount + li.scholarship_discount,
             discount_description="; ".join(discount_desc_parts) if discount_desc_parts else None,
             line_total=li.line_total,
+            organization_id=current_user.organization_id,
         )
         db_session.add(line_item)
 

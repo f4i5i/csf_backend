@@ -241,6 +241,7 @@ async def award_badge(
         enrollment_id=data.enrollment_id,
         badge_id=data.badge_id,
         awarded_by=current_user.id,
+        organization_id=current_user.organization_id,
     )
     db_session.add(student_badge)
     await db_session.commit()

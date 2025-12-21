@@ -157,6 +157,7 @@ async def handle_payment_succeeded(
         stripe_charge_id=payment_intent.get("latest_charge"),
         refund_amount=0,
         paid_at=datetime.now(timezone.utc),
+        organization_id=order.organization_id,
     )
     db_session.add(payment)
 
@@ -272,6 +273,7 @@ async def handle_payment_failed(
         stripe_payment_intent_id=payment_intent_id,
         failure_reason=failure_message,
         refund_amount=0,
+        organization_id=order.organization_id,
     )
     db_session.add(payment)
 
@@ -343,6 +345,7 @@ async def handle_invoice_paid(
             stripe_subscription_id=subscription_id,
             refund_amount=0,
             paid_at=datetime.now(timezone.utc),
+            organization_id=plan.organization_id,
         )
         db_session.add(payment)
 

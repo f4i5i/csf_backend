@@ -45,6 +45,7 @@ async def mark_attendance(
         class_id=data.class_id,
         attendance_data=[item.model_dump() for item in data.records],
         marked_by=current_user.id,
+        organization_id=current_user.organization_id,
     )
 
     return {"message": "Attendance marked successfully"}

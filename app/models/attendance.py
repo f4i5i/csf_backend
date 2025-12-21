@@ -137,6 +137,7 @@ class Attendance(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         class_id: str,
         attendance_data: List[dict],
         marked_by: str,
+        organization_id: str = None,
     ) -> None:
         """Bulk mark attendance for a class session."""
         for data in attendance_data:
@@ -162,6 +163,7 @@ class Attendance(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
                     status=data["status"],
                     marked_by=marked_by,
                     notes=data.get("notes"),
+                    organization_id=organization_id,
                 )
                 db_session.add(attendance)
 

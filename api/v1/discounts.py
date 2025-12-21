@@ -101,6 +101,7 @@ async def create_discount_code(
         applies_to_class_id=data.applies_to_class_id,
         is_active=True,
         created_by_id=current_user.id,
+        organization_id=current_user.organization_id,
     )
     db_session.add(discount)
     await db_session.commit()
@@ -253,6 +254,7 @@ async def create_scholarship(
         valid_until=data.valid_until,
         is_active=True,
         notes=data.notes,
+        organization_id=current_user.organization_id,
     )
     db_session.add(scholarship)
     await db_session.commit()

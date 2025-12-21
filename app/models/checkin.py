@@ -91,6 +91,7 @@ class CheckIn(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         class_id: str,
         check_in_date: date,
         is_late: bool = False,
+        organization_id: str = None,
     ) -> "CheckIn":
         """Check in a student for a class session."""
         # Check if already checked in
@@ -111,6 +112,7 @@ class CheckIn(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
             class_id=class_id,
             check_in_date=check_in_date,
             is_late=is_late,
+            organization_id=organization_id,
         )
         db_session.add(checkin)
         return checkin
@@ -122,12 +124,14 @@ class CheckIn(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
         class_id: str,
         enrollment_ids: list[str],
         check_in_date: date,
+        organization_id: str = None,
     ) -> list["CheckIn"]:
         """Bulk check in multiple students."""
         checkins = []
         for enrollment_id in enrollment_ids:
             checkin = await cls.check_in_student(
-                db_session, enrollment_id, class_id, check_in_date
+                db_session, enrollment_id, class_id, check_in_date,
+                organization_id=organization_id
             )
             checkins.append(checkin)
 

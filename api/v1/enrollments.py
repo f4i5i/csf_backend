@@ -429,6 +429,7 @@ async def join_waitlist(
         base_price=class_.base_price,
         discount_amount=order_data["items"][0]["discount_amount"],
         final_price=order_data["items"][0]["final_price"],
+        organization_id=current_user.organization_id,
     )
 
     db_session.add(enrollment)

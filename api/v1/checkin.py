@@ -60,6 +60,7 @@ async def check_in_student(
         data.class_id,
         data.check_in_date,
         data.is_late,
+        organization_id=current_user.organization_id,
     )
     await db_session.commit()
     await db_session.refresh(checkin)
@@ -88,6 +89,7 @@ async def bulk_check_in(
         data.class_id,
         data.enrollment_ids,
         data.check_in_date,
+        organization_id=current_user.organization_id,
     )
 
     return CheckInListResponse(

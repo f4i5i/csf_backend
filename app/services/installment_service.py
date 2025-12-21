@@ -148,6 +148,7 @@ class InstallmentService:
             start_date=start_date,
             stripe_subscription_id=stripe_result["id"],
             status=InstallmentPlanStatus.ACTIVE,
+            organization_id=user.organization_id,
         )
 
         # Create individual installment payment records
@@ -159,6 +160,7 @@ class InstallmentService:
                     due_date=item.due_date,
                     amount=item.amount,
                     status=InstallmentPaymentStatus.PENDING,
+                    organization_id=user.organization_id,
                 )
             )
 
