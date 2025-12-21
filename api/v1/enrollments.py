@@ -269,17 +269,21 @@ async def cancel_enrollment(
 
     await db_session.commit()
 
-    # Send cancellation confirmation email
+    # Send cancellation confirmation email (non-blocking)
     if child and class_:
-        send_cancellation_confirmation_email.delay(
-            user_email=current_user.email,
-            user_name=current_user.full_name,
-            child_name=child.full_name,
-            class_name=class_.name,
-            cancellation_date=datetime.now(timezone.utc).date().isoformat(),
-            refund_amount=str(refund_amount) if refund_amount else None,
-            effective_date=datetime.now(timezone.utc).date().isoformat(),
-        )
+        try:
+            send_cancellation_confirmation_email.delay(
+                user_email=current_user.email,
+                user_name=current_user.full_name,
+                child_name=child.full_name,
+                class_name=class_.name,
+                cancellation_date=datetime.now(timezone.utc).date().isoformat(),
+                refund_amount=str(refund_amount) if refund_amount else None,
+                effective_date=datetime.now(timezone.utc).date().isoformat(),
+            )
+        except Exception as email_error:
+            # Don't fail the cancellation if email task queuing fails (e.g., Redis down)
+            logger.warning(f"Failed to queue cancellation confirmation email: {email_error}")
 
     return {
         "message": "Enrollment cancelled successfully",
@@ -657,6 +661,48 @@ async def list_enrollments_by_class(
 
     items = [await enrollment_to_response(e, db_session) for e in enrollments]
     return EnrollmentListResponse(items=items, total=len(items))
+
+
+@router.delete("/cleanup/pending")
+async def cleanup_pending_enrollments(
+    hours_old: int = 24,
+    current_user: User = Depends(get_current_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Clean up stale PENDING enrollments from failed checkouts (admin only).
+
+    Deletes PENDING enrollments older than the specified hours (default 24).
+    This helps clean up orphan enrollments from failed checkout attempts.
+    """
+    from datetime import timedelta
+
+    logger.info(f"Cleanup pending enrollments older than {hours_old} hours by admin: {current_user.id}")
+
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_old)
+
+    # Find old pending enrollments
+    result = await db_session.execute(
+        select(Enrollment).where(
+            Enrollment.status == EnrollmentStatus.PENDING,
+            Enrollment.created_at < cutoff_time,
+        )
+    )
+    old_pending = result.scalars().all()
+
+    deleted_count = 0
+    for enrollment in old_pending:
+        await db_session.delete(enrollment)
+        deleted_count += 1
+
+    await db_session.commit()
+
+    logger.info(f"Deleted {deleted_count} stale pending enrollments")
+
+    return {
+        "message": f"Cleaned up {deleted_count} stale pending enrollments",
+        "deleted_count": deleted_count,
+    }
 
 
 @router.post("/{enrollment_id}/activate", response_model=EnrollmentResponse)

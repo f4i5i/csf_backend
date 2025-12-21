@@ -166,19 +166,29 @@ async def create_order(
     school_ids = list(set([c.school_id for c in classes if c.school_id]))
 
     # Get waivers (global + program-specific + school-specific) for this organization
+    # Build OR conditions dynamically to avoid SQL errors with empty lists
+    or_conditions = [
+        # Global waivers (not tied to specific program or school)
+        and_(
+            WaiverTemplate.applies_to_program_id.is_(None),
+            WaiverTemplate.applies_to_school_id.is_(None)
+        )
+    ]
+
+    # Add program-specific waivers if there are programs
+    if program_ids:
+        or_conditions.append(WaiverTemplate.applies_to_program_id.in_(program_ids))
+
+    # Add school-specific waivers if there are schools
+    if school_ids:
+        or_conditions.append(WaiverTemplate.applies_to_school_id.in_(school_ids))
+
     result = await db_session.execute(
         select(WaiverTemplate).where(
             and_(
                 WaiverTemplate.is_active == True,
                 WaiverTemplate.organization_id == current_user.organization_id,
-                or_(
-                    and_(
-                        WaiverTemplate.applies_to_program_id.is_(None),
-                        WaiverTemplate.applies_to_school_id.is_(None)
-                    ),
-                    WaiverTemplate.applies_to_program_id.in_(program_ids) if program_ids else False,
-                    WaiverTemplate.applies_to_school_id.in_(school_ids) if school_ids else False
-                )
+                or_(*or_conditions)
             )
         )
     )
@@ -304,16 +314,21 @@ async def create_order(
             "price": f"${line_item.line_total:.2f}",
         })
 
-    send_order_confirmation_email.delay(
-        user_email=current_user.email,
-        user_name=current_user.full_name,
-        order_id=order.id,
-        order_items=order_items,
-        subtotal=str(order.subtotal),
-        discount_total=str(order.discount_total),
-        total=str(order.total),
-        payment_type="Pending",
-    )
+    # Send confirmation email asynchronously (non-blocking)
+    try:
+        send_order_confirmation_email.delay(
+            user_email=current_user.email,
+            user_name=current_user.full_name,
+            order_id=order.id,
+            order_items=order_items,
+            subtotal=str(order.subtotal),
+            discount_total=str(order.discount_total),
+            total=str(order.total),
+            payment_type="Pending",
+        )
+    except Exception as email_error:
+        # Don't fail the order if email task queuing fails (e.g., Redis down)
+        logger.warning(f"Failed to queue order confirmation email: {email_error}")
 
     logger.info(f"Order created: {order.id}")
     return order_to_response(order)
