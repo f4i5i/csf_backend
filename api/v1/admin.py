@@ -4,7 +4,8 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, case, cast, func, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_admin
@@ -23,11 +24,13 @@ from app.schemas.admin import (
     DashboardMetricsResponse,
     PendingRefundResponse,
     PendingRefundsListResponse,
+    ProgramEnrollmentCount,
     RefundApprovalRequest,
     RefundItemResponse,
     RefundSearchResponse,
     RevenueReportResponse,
     RosterStudentResponse,
+    TodayClassInfo,
 )
 from core.db import get_db
 from core.exceptions.base import NotFoundException
@@ -43,27 +46,23 @@ async def get_dashboard_metrics(
     db_session: AsyncSession = Depends(get_db),
     current_admin: User = Depends(get_current_admin),
 ) -> DashboardMetricsResponse:
-    """Get dashboard metrics for admin overview.
-
-    Returns key metrics:
-    - Total revenue (all time, this month, this week)
-    - Active enrollments
-    - Total students
-    - Total classes
-    - Attendance rate
-    - Recent activity counts
-    """
+    """Get comprehensive dashboard metrics for admin overview."""
     logger.info(f"Fetching dashboard metrics for admin: {current_admin.id}")
 
     # Date ranges
     today = date.today()
+    now = datetime.now()
+    yesterday = now - timedelta(hours=24)
+    week_ago = now - timedelta(days=7)
+    month_ago = now - timedelta(days=30)
     week_start = today - timedelta(days=today.weekday())
     month_start = date(today.year, today.month, 1)
 
-    # Total Revenue (paid/completed payments only)
+    # ============ REVENUE METRICS ============
+    # Total Revenue (succeeded payments only)
     revenue_all_time = await db_session.execute(
         select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.status == PaymentStatus.COMPLETED
+            Payment.status == PaymentStatus.SUCCEEDED
         )
     )
     total_revenue = float(revenue_all_time.scalar() or 0)
@@ -71,7 +70,7 @@ async def get_dashboard_metrics(
     # Revenue this month
     revenue_month = await db_session.execute(
         select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.status == PaymentStatus.COMPLETED,
+            Payment.status == PaymentStatus.SUCCEEDED,
             func.date(Payment.created_at) >= month_start,
         )
     )
@@ -80,39 +79,57 @@ async def get_dashboard_metrics(
     # Revenue this week
     revenue_week = await db_session.execute(
         select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.status == PaymentStatus.COMPLETED,
+            Payment.status == PaymentStatus.SUCCEEDED,
             func.date(Payment.created_at) >= week_start,
         )
     )
     revenue_this_week = float(revenue_week.scalar() or 0)
 
+    # ============ COUNT METRICS ============
     # Active Enrollments
-    active_enrollments = await db_session.execute(
+    active_enrollments_result = await db_session.execute(
         select(func.count(Enrollment.id)).where(
             Enrollment.status == EnrollmentStatus.ACTIVE
         )
     )
-    total_active_enrollments = active_enrollments.scalar() or 0
+    total_active_enrollments = active_enrollments_result.scalar() or 0
 
-    # Total Students (unique children with active enrollments)
-    total_students = await db_session.execute(
-        select(func.count(func.distinct(Enrollment.child_id))).where(
-            Enrollment.status == EnrollmentStatus.ACTIVE
-        )
+    # Total Students (unique children with any enrollment)
+    total_students_result = await db_session.execute(
+        select(func.count(func.distinct(Enrollment.child_id)))
     )
-    total_unique_students = total_students.scalar() or 0
+    total_unique_students = total_students_result.scalar() or 0
 
     # Total Active Classes
-    total_classes = await db_session.execute(
+    total_classes_result = await db_session.execute(
         select(func.count(Class.id)).where(Class.is_active == True)
     )
-    total_active_classes = total_classes.scalar() or 0
+    total_active_classes = total_classes_result.scalar() or 0
 
+    # Total Schools
+    total_schools_result = await db_session.execute(
+        select(func.count(School.id)).where(School.is_active == True)
+    )
+    total_schools = total_schools_result.scalar() or 0
+
+    # Total Areas
+    total_areas_result = await db_session.execute(
+        select(func.count(Area.id)).where(Area.is_active == True)
+    )
+    total_areas = total_areas_result.scalar() or 0
+
+    # Total Programs
+    total_programs_result = await db_session.execute(
+        select(func.count(Program.id)).where(Program.is_active == True)
+    )
+    total_programs = total_programs_result.scalar() or 0
+
+    # ============ ACTIVITY METRICS ============
     # Attendance Rate (last 30 days)
     attendance_30_days = await db_session.execute(
         select(
             func.count(Attendance.id),
-            func.sum(func.case((Attendance.status == "present", 1), else_=0)),
+            func.sum(case((Attendance.status == "present", 1), else_=0)),
         ).where(Attendance.date >= today - timedelta(days=30))
     )
     attendance_data = attendance_30_days.first()
@@ -130,9 +147,137 @@ async def get_dashboard_metrics(
 
     # Pending Orders
     pending_orders = await db_session.execute(
-        select(func.count(Order.id)).where(Order.status == OrderStatus.PENDING)
+        select(func.count(Order.id)).where(Order.status == OrderStatus.PENDING_PAYMENT)
     )
     pending_order_count = pending_orders.scalar() or 0
+
+    # Checked in today
+    checked_in_today_result = await db_session.execute(
+        select(func.count(Attendance.id)).where(
+            Attendance.date == today,
+            Attendance.status == "present"
+        )
+    )
+    checked_in_today = checked_in_today_result.scalar() or 0
+
+    # ============ REGISTRATIONS BY TIME PERIOD ============
+    registrations_24h_result = await db_session.execute(
+        select(func.count(Enrollment.id)).where(
+            Enrollment.created_at >= yesterday,
+            Enrollment.status.in_([EnrollmentStatus.ACTIVE, EnrollmentStatus.PENDING])
+        )
+    )
+    registrations_24h = registrations_24h_result.scalar() or 0
+
+    registrations_7d_result = await db_session.execute(
+        select(func.count(Enrollment.id)).where(
+            Enrollment.created_at >= week_ago,
+            Enrollment.status.in_([EnrollmentStatus.ACTIVE, EnrollmentStatus.PENDING])
+        )
+    )
+    registrations_7d = registrations_7d_result.scalar() or 0
+
+    registrations_30d_result = await db_session.execute(
+        select(func.count(Enrollment.id)).where(
+            Enrollment.created_at >= month_ago,
+            Enrollment.status.in_([EnrollmentStatus.ACTIVE, EnrollmentStatus.PENDING])
+        )
+    )
+    registrations_30d = registrations_30d_result.scalar() or 0
+
+    # ============ CANCELLATIONS BY TIME PERIOD ============
+    cancellations_24h_result = await db_session.execute(
+        select(func.count(Enrollment.id)).where(
+            Enrollment.cancelled_at >= yesterday
+        )
+    )
+    cancellations_24h = cancellations_24h_result.scalar() or 0
+
+    cancellations_7d_result = await db_session.execute(
+        select(func.count(Enrollment.id)).where(
+            Enrollment.cancelled_at >= week_ago
+        )
+    )
+    cancellations_7d = cancellations_7d_result.scalar() or 0
+
+    cancellations_30d_result = await db_session.execute(
+        select(func.count(Enrollment.id)).where(
+            Enrollment.cancelled_at >= month_ago
+        )
+    )
+    cancellations_30d = cancellations_30d_result.scalar() or 0
+
+    # ============ PROGRAMS WITH ENROLLMENT COUNTS ============
+    programs_result = await db_session.execute(
+        select(
+            Program.id,
+            Program.name,
+            func.count(Enrollment.id).label("count")
+        )
+        .outerjoin(Class, Class.program_id == Program.id)
+        .outerjoin(Enrollment, and_(
+            Enrollment.class_id == Class.id,
+            Enrollment.status == EnrollmentStatus.ACTIVE
+        ))
+        .where(Program.is_active == True)
+        .group_by(Program.id, Program.name)
+        .order_by(func.count(Enrollment.id).desc())
+    )
+    programs_data = programs_result.all()
+    programs_with_counts = [
+        ProgramEnrollmentCount(id=p[0], name=p[1], count=p[2] or 0)
+        for p in programs_data
+    ]
+
+    # ============ TODAY'S CLASSES ============
+    # Get classes that are scheduled for today (based on weekdays JSON array)
+    today_day_name = today.strftime("%A").lower()
+    today_classes_result = await db_session.execute(
+        select(Class, School)
+        .outerjoin(School, School.id == Class.school_id)
+        .where(
+            Class.is_active == True,
+            cast(Class.weekdays, JSONB).op('@>')(cast([today_day_name], JSONB)),
+            Class.start_date <= today,
+            Class.end_date >= today
+        )
+        .order_by(Class.start_time)
+        .limit(10)
+    )
+    today_classes_data = today_classes_result.all()
+    today_classes = [
+        TodayClassInfo(
+            id=cls.id,
+            name=cls.name,
+            school_name=school.name if school else "Unknown",
+            start_time=cls.start_time.strftime("%I:%M %p") if cls.start_time else None,
+            end_time=cls.end_time.strftime("%I:%M %p") if cls.end_time else None,
+            enrolled_count=cls.current_enrollment or 0
+        )
+        for cls, school in today_classes_data
+    ]
+
+    # ============ MONTHLY ENROLLMENT DATA (Last 12 months) ============
+    monthly_enrollments = []
+    for i in range(11, -1, -1):
+        month_date = today - timedelta(days=i * 30)
+        month_start_date = date(month_date.year, month_date.month, 1)
+        if month_date.month == 12:
+            month_end_date = date(month_date.year + 1, 1, 1)
+        else:
+            month_end_date = date(month_date.year, month_date.month + 1, 1)
+
+        month_count_result = await db_session.execute(
+            select(func.count(Enrollment.id)).where(
+                Enrollment.created_at >= month_start_date,
+                Enrollment.created_at < month_end_date
+            )
+        )
+        count = month_count_result.scalar() or 0
+        monthly_enrollments.append({
+            "month": month_start_date.strftime("%b"),
+            "value": count
+        })
 
     return DashboardMetricsResponse(
         total_revenue=total_revenue,
@@ -141,9 +286,22 @@ async def get_dashboard_metrics(
         active_enrollments=total_active_enrollments,
         total_students=total_unique_students,
         total_classes=total_active_classes,
+        total_schools=total_schools,
+        total_areas=total_areas,
+        total_programs=total_programs,
         attendance_rate=round(attendance_rate, 2),
         new_enrollments_this_week=new_enrollments,
         pending_orders=pending_order_count,
+        checked_in_today=checked_in_today,
+        registrations_24h=registrations_24h,
+        registrations_7d=registrations_7d,
+        registrations_30d=registrations_30d,
+        cancellations_24h=cancellations_24h,
+        cancellations_7d=cancellations_7d,
+        cancellations_30d=cancellations_30d,
+        programs_with_counts=programs_with_counts,
+        today_classes=today_classes,
+        monthly_enrollments=monthly_enrollments,
     )
 
 

@@ -110,3 +110,28 @@ class PromoteWaitlistRequest(BaseSchema):
 
     enrollment_id: str
     skip_payment: bool = False  # Admin can skip payment requirement
+
+
+# ============== Admin Enrollment Management Schemas ==============
+
+
+class AdminEnrollmentCreate(BaseSchema):
+    """Schema for admin to create an enrollment directly."""
+
+    child_id: str
+    class_id: str
+    status: str = "active"  # active, pending, waitlisted
+    base_price: Optional[Decimal] = None  # If not provided, uses class base price
+    discount_amount: Decimal = Decimal("0.00")
+    final_price: Optional[Decimal] = None  # If not provided, calculated from base - discount
+    notes: Optional[str] = None
+
+
+class AdminEnrollmentUpdate(BaseSchema):
+    """Schema for admin to update an enrollment."""
+
+    status: Optional[str] = None  # active, pending, completed, cancelled, waitlisted
+    base_price: Optional[Decimal] = None
+    discount_amount: Optional[Decimal] = None
+    final_price: Optional[Decimal] = None
+    cancellation_reason: Optional[str] = None

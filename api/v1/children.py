@@ -71,6 +71,7 @@ async def child_to_response(child: Child, db_session: AsyncSession) -> ChildResp
                     school_name=school_name,
                     weekdays=class_.weekdays,
                     status=enrollment.status.value,
+                    class_status=class_.status.value if hasattr(class_, 'status') else 'active',
                     enrolled_at=enrollment.enrolled_at,
                 )
             )

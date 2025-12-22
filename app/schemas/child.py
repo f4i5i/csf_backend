@@ -137,7 +137,8 @@ class ChildEnrollmentInfo(BaseSchema):
     school_id: Optional[str]
     school_name: Optional[str]
     weekdays: Optional[List[str]]
-    status: str
+    status: str  # Enrollment status: pending, active, completed, cancelled
+    class_status: str = "active"  # Class lifecycle status: active, completed, cancelled
     enrolled_at: Optional[datetime]
 
 

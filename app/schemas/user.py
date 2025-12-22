@@ -131,3 +131,73 @@ class ResetPasswordRequest(BaseSchema):
         if self.new_password != self.confirm_password:
             raise ValueError("Passwords do not match")
         return self
+
+
+# ============== Admin User Management Schemas ==============
+
+
+class AdminUserCreate(BaseSchema):
+    """Schema for admin to create a new user."""
+
+    email: EmailStr
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    phone: Optional[str] = Field(None, max_length=20)
+    role: Role = Role.PARENT
+    password: Optional[str] = Field(None, min_length=8, max_length=100)
+    is_active: bool = True
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        """Validate email and block disposable email addresses."""
+        if is_disposable_email(v):
+            raise ValueError("Disposable email addresses are not allowed")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not any(c.isupper() for c in v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not any(c.islower() for c in v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one digit")
+        return v
+
+
+class AdminUserUpdate(BaseSchema):
+    """Schema for admin to update a user."""
+
+    first_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, max_length=20)
+    role: Optional[Role] = None
+    is_active: Optional[bool] = None
+    password: Optional[str] = Field(None, min_length=8, max_length=100)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not any(c.isupper() for c in v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not any(c.islower() for c in v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one digit")
+        return v
+
+
+class UserListResponse(BaseSchema):
+    """Schema for paginated user list response."""
+
+    items: list[UserResponse]
+    total: int
+    skip: int = 0
+    limit: int = 20

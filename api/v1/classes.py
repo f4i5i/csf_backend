@@ -377,3 +377,87 @@ async def sync_all_enrollments(
         "updated_count": synced_count,
         "updated_classes": updated_classes[:20],  # Limit to first 20 for response size
     }
+
+
+@router.post("/{class_id}/complete")
+async def mark_class_complete(
+    class_id: str,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+) -> dict:
+    """
+    Mark a class as completed.
+
+    This will:
+    1. Set class status to COMPLETED
+    2. Set is_active to False
+    3. Update all ACTIVE enrollments to COMPLETED
+
+    Requires admin or owner role.
+    """
+    from app.models.class_ import ClassStatus
+
+    logger.info(f"Mark class as complete request by user: {current_user.id}, class_id: {class_id}")
+
+    class_obj = await Class.get_by_id(db_session, class_id)
+    if not class_obj:
+        logger.warning(f"Class not found: {class_id}")
+        raise NotFoundException(message="Class not found")
+
+    if class_obj.status == ClassStatus.COMPLETED:
+        raise BadRequestException(message="Class is already marked as completed")
+
+    # Mark class as complete and update all enrollments
+    updated_count = await class_obj.mark_as_complete(db_session)
+
+    logger.info(
+        f"Class {class_id} marked as complete. {updated_count} enrollments updated to COMPLETED"
+    )
+
+    return {
+        "message": "Class marked as completed successfully",
+        "class_id": class_id,
+        "class_name": class_obj.name,
+        "enrollments_completed": updated_count,
+    }
+
+
+@router.post("/{class_id}/reactivate")
+async def reactivate_class(
+    class_id: str,
+    db_session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+) -> dict:
+    """
+    Reactivate a completed or cancelled class.
+
+    Sets class status back to ACTIVE and is_active to True.
+    Note: This does NOT change enrollment statuses.
+
+    Requires admin or owner role.
+    """
+    from app.models.class_ import ClassStatus
+
+    logger.info(f"Reactivate class request by user: {current_user.id}, class_id: {class_id}")
+
+    class_obj = await Class.get_by_id(db_session, class_id)
+    if not class_obj:
+        logger.warning(f"Class not found: {class_id}")
+        raise NotFoundException(message="Class not found")
+
+    if class_obj.status == ClassStatus.ACTIVE and class_obj.is_active:
+        raise BadRequestException(message="Class is already active")
+
+    class_obj.status = ClassStatus.ACTIVE
+    class_obj.is_active = True
+    await db_session.commit()
+    await db_session.refresh(class_obj)
+
+    logger.info(f"Class {class_id} reactivated successfully")
+
+    return {
+        "message": "Class reactivated successfully",
+        "class_id": class_id,
+        "class_name": class_obj.name,
+        "status": class_obj.status.value,
+    }

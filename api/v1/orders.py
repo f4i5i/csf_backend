@@ -217,6 +217,31 @@ async def create_order(
                 message=f"Please accept all required waivers before checkout: {', '.join(missing_waivers)}"
             )
 
+    # Check if any child in the order already has an ACTIVE enrollment in an ACTIVE class
+    # A child can only be enrolled in one active class at a time
+    from app.models.child import Child
+
+    for item in data.items:
+        active_enrollment = await Class.check_child_has_active_enrollment(
+            db_session,
+            child_id=item.child_id,
+            organization_id=current_user.organization_id,
+        )
+
+        if active_enrollment:
+            # Get child name for the error message
+            child_result = await db_session.execute(
+                select(Child).where(Child.id == item.child_id)
+            )
+            child = child_result.scalar_one_or_none()
+            child_name = child.full_name if child else "This child"
+
+            raise BadRequestException(
+                message=f"{child_name} is already enrolled in an active class: {active_enrollment['class_name']}. "
+                f"A child can only be enrolled in one active class at a time. "
+                f"Please wait until the current class is completed."
+            )
+
     pricing_service = PricingService(db_session)
 
     items = [OrderItemInput(child_id=i.child_id, class_id=i.class_id) for i in data.items]
@@ -255,19 +280,59 @@ async def create_order(
         # Get the class for this line item
         class_obj = classes_dict.get(li.class_id)
 
-        # Create enrollment
-        enrollment = Enrollment(
-            id=str(uuid4()),
-            child_id=li.child_id,
-            class_id=li.class_id,
-            user_id=current_user.id,
-            status=EnrollmentStatus.PENDING,
-            base_price=li.unit_price,
-            discount_amount=li.sibling_discount + li.promo_discount + li.scholarship_discount,
-            final_price=li.line_total,
-            organization_id=current_user.organization_id,
+        # Check for existing enrollment for this child+class
+        existing_enrollment_result = await db_session.execute(
+            select(Enrollment).where(
+                Enrollment.child_id == li.child_id,
+                Enrollment.class_id == li.class_id,
+                Enrollment.organization_id == current_user.organization_id,
+            )
         )
-        db_session.add(enrollment)
+        existing_enrollment = existing_enrollment_result.scalar_one_or_none()
+
+        if existing_enrollment:
+            if existing_enrollment.status == EnrollmentStatus.ACTIVE:
+                # Child is already enrolled and paid - can't create new order
+                raise BadRequestException(
+                    message=f"Child is already enrolled in this class"
+                )
+            elif existing_enrollment.status == EnrollmentStatus.PENDING:
+                # Reuse the existing PENDING enrollment (from a previous failed checkout)
+                enrollment = existing_enrollment
+                # Update the enrollment with new pricing info
+                enrollment.base_price = li.unit_price
+                enrollment.discount_amount = li.sibling_discount + li.promo_discount + li.scholarship_discount
+                enrollment.final_price = li.line_total
+            else:
+                # CANCELLED or other status - delete and create new
+                await db_session.delete(existing_enrollment)
+                await db_session.flush()
+                enrollment = Enrollment(
+                    id=str(uuid4()),
+                    child_id=li.child_id,
+                    class_id=li.class_id,
+                    user_id=current_user.id,
+                    status=EnrollmentStatus.PENDING,
+                    base_price=li.unit_price,
+                    discount_amount=li.sibling_discount + li.promo_discount + li.scholarship_discount,
+                    final_price=li.line_total,
+                    organization_id=current_user.organization_id,
+                )
+                db_session.add(enrollment)
+        else:
+            # No existing enrollment - create new
+            enrollment = Enrollment(
+                id=str(uuid4()),
+                child_id=li.child_id,
+                class_id=li.class_id,
+                user_id=current_user.id,
+                status=EnrollmentStatus.PENDING,
+                base_price=li.unit_price,
+                discount_amount=li.sibling_discount + li.promo_discount + li.scholarship_discount,
+                final_price=li.line_total,
+                organization_id=current_user.organization_id,
+            )
+            db_session.add(enrollment)
 
         # Build discount description
         discount_desc_parts = []

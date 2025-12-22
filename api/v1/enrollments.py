@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,9 +17,12 @@ from api.deps import (
 from app.models.child import Child
 from app.models.class_ import Class
 from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.models.order import OrderLineItem
 from app.models.user import User
 from app.tasks.email_tasks import send_cancellation_confirmation_email
 from app.schemas.enrollment import (
+    AdminEnrollmentCreate,
+    AdminEnrollmentUpdate,
     CancellationRefundPreview,
     ClaimWaitlistRequest,
     EnrollmentCancel,
@@ -745,5 +748,217 @@ async def activate_enrollment(
         class_.current_enrollment += 1
 
     await db_session.commit()
+    await db_session.refresh(enrollment)
 
     return await enrollment_to_response(enrollment, db_session)
+
+
+# ============== Admin CRUD Endpoints ==============
+
+
+@router.post("/", response_model=EnrollmentResponse)
+async def create_enrollment(
+    data: AdminEnrollmentCreate,
+    current_user: User = Depends(get_current_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> EnrollmentResponse:
+    """
+    Create an enrollment directly (admin only).
+
+    Allows admin to enroll a child in a class without going through checkout.
+    """
+    logger.info(f"Admin {current_user.id} creating enrollment for child {data.child_id} in class {data.class_id}")
+
+    # Verify child exists
+    child_result = await db_session.execute(
+        select(Child).where(Child.id == data.child_id)
+    )
+    child = child_result.scalar_one_or_none()
+    if not child:
+        raise NotFoundException(message="Child not found")
+
+    # Verify class exists
+    class_result = await db_session.execute(
+        select(Class).where(Class.id == data.class_id)
+    )
+    class_ = class_result.scalar_one_or_none()
+    if not class_:
+        raise NotFoundException(message="Class not found")
+
+    # Check if child already enrolled in this class
+    existing_result = await db_session.execute(
+        select(Enrollment).where(
+            Enrollment.child_id == data.child_id,
+            Enrollment.class_id == data.class_id,
+            Enrollment.status.in_([EnrollmentStatus.ACTIVE, EnrollmentStatus.PENDING]),
+        )
+    )
+    if existing_result.scalar_one_or_none():
+        raise BadRequestException(message="Child is already enrolled in this class")
+
+    # Check class capacity for active enrollments
+    if data.status == "active" and class_.current_enrollment >= class_.capacity:
+        raise BadRequestException(message="Class is full")
+
+    # Calculate prices
+    base_price = data.base_price if data.base_price is not None else class_.base_price
+    discount_amount = data.discount_amount
+    final_price = data.final_price if data.final_price is not None else (base_price - discount_amount)
+
+    # Map status string to enum
+    status_map = {
+        "active": EnrollmentStatus.ACTIVE,
+        "pending": EnrollmentStatus.PENDING,
+        "waitlisted": EnrollmentStatus.WAITLISTED,
+        "completed": EnrollmentStatus.COMPLETED,
+        "cancelled": EnrollmentStatus.CANCELLED,
+    }
+    enrollment_status = status_map.get(data.status.lower(), EnrollmentStatus.ACTIVE)
+
+    # Create enrollment
+    enrollment = Enrollment(
+        child_id=data.child_id,
+        class_id=data.class_id,
+        user_id=child.user_id,
+        status=enrollment_status,
+        base_price=base_price,
+        discount_amount=discount_amount,
+        final_price=final_price,
+        organization_id=current_user.organization_id,
+    )
+
+    if enrollment_status == EnrollmentStatus.ACTIVE:
+        enrollment.enrolled_at = datetime.now(timezone.utc)
+        class_.current_enrollment += 1
+
+    db_session.add(enrollment)
+    await db_session.commit()
+    await db_session.refresh(enrollment)
+
+    logger.info(f"Enrollment created successfully: {enrollment.id}")
+    return await enrollment_to_response(enrollment, db_session)
+
+
+@router.put("/{enrollment_id}", response_model=EnrollmentResponse)
+async def update_enrollment(
+    enrollment_id: str,
+    data: AdminEnrollmentUpdate,
+    current_user: User = Depends(get_current_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> EnrollmentResponse:
+    """
+    Update an enrollment (admin only).
+
+    Can update status, prices, and other enrollment details.
+    """
+    logger.info(f"Admin {current_user.id} updating enrollment {enrollment_id}")
+
+    result = await db_session.execute(
+        select(Enrollment).where(Enrollment.id == enrollment_id)
+    )
+    enrollment = result.scalar_one_or_none()
+
+    if not enrollment:
+        raise NotFoundException(message="Enrollment not found")
+
+    # Get class for enrollment count updates
+    class_result = await db_session.execute(
+        select(Class).where(Class.id == enrollment.class_id)
+    )
+    class_ = class_result.scalar_one_or_none()
+
+    old_status = enrollment.status
+
+    # Update fields
+    if data.status is not None:
+        status_map = {
+            "active": EnrollmentStatus.ACTIVE,
+            "pending": EnrollmentStatus.PENDING,
+            "waitlisted": EnrollmentStatus.WAITLISTED,
+            "completed": EnrollmentStatus.COMPLETED,
+            "cancelled": EnrollmentStatus.CANCELLED,
+        }
+        new_status = status_map.get(data.status.lower())
+        if not new_status:
+            raise BadRequestException(message=f"Invalid status: {data.status}")
+
+        # Handle class enrollment count changes
+        if class_:
+            # If changing TO active from non-active
+            if new_status == EnrollmentStatus.ACTIVE and old_status != EnrollmentStatus.ACTIVE:
+                if class_.current_enrollment >= class_.capacity:
+                    raise BadRequestException(message="Class is full")
+                class_.current_enrollment += 1
+                enrollment.enrolled_at = datetime.now(timezone.utc)
+            # If changing FROM active to non-active
+            elif old_status == EnrollmentStatus.ACTIVE and new_status != EnrollmentStatus.ACTIVE:
+                class_.current_enrollment = max(0, class_.current_enrollment - 1)
+
+        # Handle cancellation
+        if new_status == EnrollmentStatus.CANCELLED and old_status != EnrollmentStatus.CANCELLED:
+            enrollment.cancelled_at = datetime.now(timezone.utc)
+
+        enrollment.status = new_status
+
+    if data.base_price is not None:
+        enrollment.base_price = data.base_price
+
+    if data.discount_amount is not None:
+        enrollment.discount_amount = data.discount_amount
+
+    if data.final_price is not None:
+        enrollment.final_price = data.final_price
+
+    if data.cancellation_reason is not None:
+        enrollment.cancellation_reason = data.cancellation_reason
+
+    await db_session.commit()
+    await db_session.refresh(enrollment)
+
+    logger.info(f"Enrollment updated successfully: {enrollment_id}")
+    return await enrollment_to_response(enrollment, db_session)
+
+
+@router.delete("/{enrollment_id}")
+async def delete_enrollment(
+    enrollment_id: str,
+    current_user: User = Depends(get_current_admin),
+    db_session: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Delete an enrollment (admin only).
+
+    This permanently removes the enrollment record. Use cancel for normal cancellations.
+    Related order line items will have their enrollment_id set to NULL to preserve order history.
+    """
+    logger.info(f"Admin {current_user.id} deleting enrollment {enrollment_id}")
+
+    result = await db_session.execute(
+        select(Enrollment).where(Enrollment.id == enrollment_id)
+    )
+    enrollment = result.scalar_one_or_none()
+
+    if not enrollment:
+        raise NotFoundException(message="Enrollment not found")
+
+    # Update class enrollment count if was active
+    if enrollment.status == EnrollmentStatus.ACTIVE:
+        class_result = await db_session.execute(
+            select(Class).where(Class.id == enrollment.class_id)
+        )
+        class_ = class_result.scalar_one_or_none()
+        if class_:
+            class_.current_enrollment = max(0, class_.current_enrollment - 1)
+
+    # Unlink related order line items (set enrollment_id to NULL to preserve order history)
+    await db_session.execute(
+        update(OrderLineItem)
+        .where(OrderLineItem.enrollment_id == enrollment_id)
+        .values(enrollment_id=None)
+    )
+
+    await db_session.delete(enrollment)
+    await db_session.commit()
+
+    logger.info(f"Enrollment deleted successfully: {enrollment_id}")
+    return {"message": "Enrollment deleted successfully"}

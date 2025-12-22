@@ -58,6 +58,14 @@ class Weekday(str, enum.Enum):
     SUNDAY = "sunday"
 
 
+class ClassStatus(str, enum.Enum):
+    """Status/lifecycle stage of a class."""
+
+    ACTIVE = "active"  # Class is currently running, accepting enrollments
+    COMPLETED = "completed"  # Class has finished
+    CANCELLED = "cancelled"  # Class was cancelled
+
+
 class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     """Class model representing sports class offerings."""
 
@@ -176,6 +184,13 @@ class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
     max_age: Mapped[int] = mapped_column(Integer, nullable=False)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Class lifecycle status
+    status: Mapped[ClassStatus] = mapped_column(
+        Enum(ClassStatus, name="classstatus", native_enum=False, values_callable=lambda x: [e.value for e in x]),
+        default=ClassStatus.ACTIVE,
+        nullable=False
+    )
 
     # Relationships
     program: Mapped["Program"] = relationship("Program", back_populates="classes")
@@ -351,3 +366,71 @@ class Class(Base, TimestampMixin, SoftDeleteMixin, OrganizationMixin):
             await db_session.refresh(self)
 
         return actual_count
+
+    async def mark_as_complete(self, db_session: AsyncSession) -> int:
+        """
+        Mark class as completed and update all ACTIVE enrollments to COMPLETED.
+
+        Returns the number of enrollments updated.
+        """
+        from app.models.enrollment import Enrollment, EnrollmentStatus
+        from datetime import datetime, timezone
+
+        # Update class status
+        self.status = ClassStatus.COMPLETED
+        self.is_active = False
+
+        # Get all ACTIVE enrollments for this class
+        result = await db_session.execute(
+            select(Enrollment).where(
+                Enrollment.class_id == self.id,
+                Enrollment.status == EnrollmentStatus.ACTIVE,
+            )
+        )
+        active_enrollments = result.scalars().all()
+
+        # Update each enrollment to COMPLETED
+        updated_count = 0
+        for enrollment in active_enrollments:
+            enrollment.status = EnrollmentStatus.COMPLETED
+            updated_count += 1
+
+        await db_session.commit()
+        await db_session.refresh(self)
+
+        return updated_count
+
+    @classmethod
+    async def check_child_has_active_enrollment(
+        cls,
+        db_session: AsyncSession,
+        child_id: str,
+        organization_id: str,
+    ) -> Optional[dict]:
+        """
+        Check if a child has any ACTIVE enrollment in an ACTIVE class.
+
+        Returns dict with class info if enrolled, None otherwise.
+        """
+        from app.models.enrollment import Enrollment, EnrollmentStatus
+
+        result = await db_session.execute(
+            select(Enrollment, cls)
+            .join(cls, Enrollment.class_id == cls.id)
+            .where(
+                Enrollment.child_id == child_id,
+                Enrollment.organization_id == organization_id,
+                Enrollment.status == EnrollmentStatus.ACTIVE,
+                cls.status == ClassStatus.ACTIVE,
+            )
+        )
+        row = result.first()
+
+        if row:
+            enrollment, class_obj = row
+            return {
+                "enrollment_id": enrollment.id,
+                "class_id": class_obj.id,
+                "class_name": class_obj.name,
+            }
+        return None

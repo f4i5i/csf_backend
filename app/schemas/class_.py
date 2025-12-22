@@ -258,6 +258,7 @@ class ClassResponse(BaseSchema):
     max_age: int
 
     is_active: bool
+    status: str = "active"  # Class lifecycle status: active, completed, cancelled
     created_at: datetime
     updated_at: datetime
 

@@ -6,18 +6,63 @@ from typing import Any, Dict, List, Optional
 from app.schemas.base import BaseSchema
 
 
+class ProgramEnrollmentCount(BaseSchema):
+    """Schema for program enrollment count."""
+
+    id: str
+    name: str
+    count: int
+
+
+class TodayClassInfo(BaseSchema):
+    """Schema for today's class info."""
+
+    id: str
+    name: str
+    school_name: str
+    start_time: Optional[str]
+    end_time: Optional[str]
+    enrolled_count: int
+
+
 class DashboardMetricsResponse(BaseSchema):
     """Schema for dashboard metrics response."""
 
+    # Revenue metrics
     total_revenue: float
     revenue_this_month: float
     revenue_this_week: float
+
+    # Counts
     active_enrollments: int
     total_students: int
     total_classes: int
+    total_schools: int
+    total_areas: int
+    total_programs: int
+
+    # Activity metrics
     attendance_rate: float
     new_enrollments_this_week: int
     pending_orders: int
+    checked_in_today: int
+
+    # Registration/Cancellation breakdown
+    registrations_24h: int
+    registrations_7d: int
+    registrations_30d: int
+    cancellations_24h: int
+    cancellations_7d: int
+    cancellations_30d: int
+
+    # Program breakdown
+    programs_with_counts: List[ProgramEnrollmentCount]
+
+    # Today's classes
+    today_classes: List[TodayClassInfo]
+
+    # Monthly enrollment data for chart
+    monthly_enrollments: List[Dict[str, Any]]
 
 
 class RevenueReportResponse(BaseSchema):
